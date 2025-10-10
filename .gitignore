@@ -153,8 +153,8 @@ cython_debug/
 *_notes.md
 session_notes.md
 
-# Local data files
-data/
+# Local data files (exclude source code in core/data/)
+/data/
 logs/
 uploads/
 
