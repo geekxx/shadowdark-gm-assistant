@@ -60,8 +60,8 @@ class NotionSync:
         # Default properties
         page_properties = {
             "Name": {"title": [{"text": {"content": title}}]},
-            "Status": {"select": {"name": "Draft"}},
-            "Type": {"select": {"name": "Session Notes"}}
+            "Status": {"multi_select": [{"name": "Draft"}]},
+            "Type": {"multi_select": [{"name": "Session Notes"}]}
         }
         
         # Add custom properties

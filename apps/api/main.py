@@ -69,7 +69,7 @@ def summarize(payload: SummarizeIn):
                     title=session_title,
                     content=notes,
                     properties={
-                        "Campaign": {"select": {"name": f"Campaign {payload.campaign_id}"}} if payload.campaign_id else None,
+                        "Campaign": {"multi_select": [{"name": f"Campaign {payload.campaign_id}"}]} if payload.campaign_id else None,
                         "Date": {"date": {"start": "2025-10-10"}}  # TODO: Use actual date
                     }
                 )

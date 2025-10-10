@@ -117,7 +117,7 @@ def cmd_session_summarize(args):
                     title=session_title,
                     content=notes,
                     properties={
-                        "Campaign": {"select": {"name": f"Campaign {args.campaign}"}} if args.campaign else None,
+                        "Campaign": {"multi_select": [{"name": f"Campaign {args.campaign}"}]} if args.campaign else None,
                         "Date": {"date": {"start": "2025-10-10"}} # TODO: Use actual date
                     }
                 )
