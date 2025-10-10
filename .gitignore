@@ -165,6 +165,6 @@ redis_data/
 # API keys and secrets (keep .env.example but not .env)
 .env
 
-# Temporary test files
-test_*.py
-*_test.py
+# Temporary test files in root directory (tests/ directory is included)
+/test_*.py
+/*_test.py

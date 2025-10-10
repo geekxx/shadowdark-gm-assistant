@@ -33,16 +33,18 @@
 
 2. Make your changes and test:
    ```bash
-   # Run tests
-   python test_session_scribe.py
-   python test_rag_enhanced.py
+   # Run unit tests
+   python tests/unit/test_session_scribe.py
+   
+   # Run integration tests
+   python tests/integration/test_rag_enhanced.py
+   python tests/integration/test_api.py
+   
+   # Run golden dataset evaluation
+   python tests/test_golden_dataset.py
    
    # Test CLI
    ./gm session summarize sample_transcript.md
-   
-   # Test API (start server first)
-   uvicorn apps.api.main:app --reload
-   python test_api.py
    ```
 
 3. Commit and push:

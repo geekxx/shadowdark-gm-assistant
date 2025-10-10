@@ -1,0 +1,1 @@
+# Test package for Shadowdark GM Assistant

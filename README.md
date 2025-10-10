@@ -104,7 +104,11 @@ shadowdark-gm/
 │   └── tools/            # Utility functions and integrations
 ├── infra/
 │   └── docker-compose.yml  # Database and services
-└── tests/                # Test files and golden datasets
+└── tests/
+    ├── golden/           # Golden dataset for evaluation
+    ├── integration/      # Integration tests
+    ├── unit/            # Unit tests
+    └── test_golden_dataset.py  # Evaluation framework
 ```
 
 ### Core Components
@@ -128,14 +132,15 @@ This tool follows Shadowdark RPG conventions:
 ### Running Tests
 
 ```bash
-# Test Session Scribe
-python test_session_scribe.py
+# Run unit tests
+python tests/unit/test_session_scribe.py
 
-# Test RAG functionality
-python test_rag_enhanced.py
+# Run integration tests  
+python tests/integration/test_rag_enhanced.py
+python tests/integration/test_api.py
 
-# Test API endpoints (requires server running)
-python test_api.py
+# Run golden dataset evaluation
+python tests/test_golden_dataset.py
 ```
 
 ### Adding New Agents
