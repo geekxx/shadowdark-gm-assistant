@@ -3,11 +3,12 @@ import os
 import re
 from datetime import datetime
 from textwrap import dedent
-from typing import List, Optional
+from typing import List, Optional, Dict
 from openai import OpenAI
 from dotenv import load_dotenv
 from sqlmodel import Session
 from ..data.models import Session as SessionModel, Event, NPC
+from .diarizer import SpeakerDiarizer, DiarizationResult
 
 load_dotenv()
 
@@ -81,6 +82,25 @@ def _build_user_prompt(transcript: str, context_chunks: List[str] = None) -> str
 def _estimate_tokens(text: str) -> int:
     """Rough token estimation (1 token ≈ 4 characters)"""
     return len(text) // 4
+
+def _enhance_transcript_with_speakers(transcript: str, speaker_mapping: Dict[str, str]) -> str:
+    """
+    Enhance a transcript with speaker labels based on diarization results.
+    
+    Args:
+        transcript: Original transcript text
+        speaker_mapping: Mapping from technical speaker IDs to readable names
+        
+    Returns:
+        Enhanced transcript with speaker labels
+    """
+    # Apply speaker mapping to transcript
+    enhanced = transcript
+    for tech_id, readable_name in speaker_mapping.items():
+        # Replace patterns like "SPEAKER_00" with "GM"
+        enhanced = re.sub(rf'\b{tech_id}\b', readable_name, enhanced)
+    
+    return enhanced
 
 def _clean_vtt_transcript(transcript: str) -> str:
     """
@@ -418,11 +438,72 @@ Prep For Next
 
     return mock_response
 
+def summarize_audio(
+    audio_path: str,
+    campaign_id: Optional[int] = None,
+    context_chunks: List[str] = None,
+    db_session: Optional[Session] = None,
+    huggingface_token: Optional[str] = None,
+    use_mock: bool = False
+) -> str:
+    """
+    Generate session notes from an audio file with speaker diarization.
+    
+    Args:
+        audio_path: Path to the audio file
+        campaign_id: Optional campaign ID for context
+        context_chunks: Optional RAG context from previous sessions/rules
+        db_session: Optional database session for persisting results
+        huggingface_token: HuggingFace token for accessing diarization models
+        use_mock: If True, use mock processing (for testing)
+        
+    Returns:
+        Formatted session notes with speaker identification
+    """
+    try:
+        if use_mock:
+            return _mock_llm_response("Audio processing not implemented in mock mode")
+        
+        # Initialize diarizer
+        diarizer = SpeakerDiarizer(huggingface_token=huggingface_token)
+        
+        # Perform diarization
+        print(f"🎙️  Processing audio file: {audio_path}")
+        diarization_result = diarizer.diarize_audio(audio_path, min_speakers=2, max_speakers=6)
+        
+        # Create speaker mapping (GM + Players)
+        speaker_mapping = diarizer.get_speaker_mapping(diarization_result)
+        print(f"🏷️  Identified speakers: {list(speaker_mapping.values())}")
+        
+        # Create diarized transcript
+        diarized_transcript = diarizer.create_speaker_transcript(diarization_result)
+        
+        # Apply readable speaker names
+        enhanced_transcript = diarizer.apply_speaker_mapping(diarized_transcript, speaker_mapping)
+        
+        # TODO: Integrate with speech-to-text to get actual transcript content
+        # For now, we'll use the diarization timeline as the transcript
+        transcript_for_notes = enhanced_transcript
+        
+        # Generate session notes using the enhanced transcript
+        return summarize_text(
+            transcript=transcript_for_notes,
+            campaign_id=campaign_id,
+            context_chunks=context_chunks,
+            db_session=db_session,
+            use_mock=use_mock
+        )
+        
+    except Exception as e:
+        today = datetime.now().strftime("%Y-%m-%d")
+        return f"[{today}]\n\nError processing audio: {str(e)}\n\n" + TEMPLATE
+
 def summarize_text(
     transcript: str, 
     campaign_id: Optional[int] = None,
     context_chunks: List[str] = None,
     db_session: Optional[Session] = None,
+    speaker_mapping: Optional[Dict[str, str]] = None,
     use_mock: bool = False
 ) -> str:
     """
@@ -433,6 +514,7 @@ def summarize_text(
         campaign_id: Optional campaign ID for context
         context_chunks: Optional RAG context from previous sessions/rules
         db_session: Optional database session for persisting results
+        speaker_mapping: Optional mapping from technical speaker IDs to readable names
         use_mock: If True, use mock LLM instead of OpenAI (for testing)
     
     Returns:
@@ -445,6 +527,10 @@ def summarize_text(
         else:
             # Clean the transcript first to reduce token count
             cleaned_transcript = _clean_vtt_transcript(transcript)
+            
+            # Enhance with speaker labels if provided
+            if speaker_mapping:
+                cleaned_transcript = _enhance_transcript_with_speakers(cleaned_transcript, speaker_mapping)
             
             # Use GPT-4o for large context window (128k tokens)
             system_prompt = _build_system_prompt()

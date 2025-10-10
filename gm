@@ -7,6 +7,7 @@ Command-line interface for the Shadowdark GM Assistant.
 Usage:
     gm session summarize input.md --out notion
     gm session summarize transcript.txt --campaign 1 --use-rag
+    gm session summarize audio.wav --campaign 1 --out notion
     gm rag ingest rules.pdf --doctype rule
     gm rag query "How do spells work?"
 """
@@ -24,7 +25,7 @@ sys.path.insert(0, str(project_root))
 from sqlmodel import create_engine, Session
 from dotenv import load_dotenv
 
-from core.agents.session_scribe import summarize_text
+from core.agents.session_scribe import summarize_text, summarize_audio
 from core.agents.rag_librarian import ingest_text, ingest_file, search
 from core.data.models import SQLModel
 from core.integrations.notion_sync import NotionSync
@@ -53,98 +54,143 @@ def write_file_content(file_path: str, content: str):
     except Exception as e:
         print(f"❌ Error writing file {file_path}: {e}")
 
+def handle_session_output(args, notes):
+    """Handle session output to various destinations"""
+    if args.out == "stdout":
+        print("\n" + "="*50)
+        print(notes)
+        print("="*50)
+    elif args.out == "notion":
+        # Sync to Notion
+        print("📝 Syncing to Notion...")
+        try:
+            notion = NotionSync()
+            
+            # Test connection first
+            if not notion.test_connection():
+                print("❌ Failed to connect to Notion. Check your NOTION_TOKEN.")
+                print("   Saving to file instead...")
+                write_file_content("session_notes.md", notes)
+                return
+            
+            # Create the page
+            page_url = notion.create_session_page(
+                title=f"Session Notes - {Path(args.input).stem}",
+                content=notes,
+                play_group=getattr(args, 'play_group', 'Online')
+            )
+            
+            if page_url:
+                print(f"✅ Session notes created in Notion: {page_url}")
+            else:
+                print("❌ Failed to create Notion page. Saving to file instead...")
+                write_file_content("session_notes.md", notes)
+            
+        except Exception as e:
+            print(f"❌ Error syncing to Notion: {e}")
+            print("   Saving to file instead...")
+            write_file_content("session_notes.md", notes)
+    else:
+        # Save to file
+        write_file_content(args.out, notes)
+    
+    print("✅ Session summarization completed!")
+
 def cmd_session_summarize(args):
     """Handle session summarize command"""
     if not os.path.exists(args.input):
         print(f"❌ Input file not found: {args.input}")
         return
     
-    print(f"📝 Summarizing session from: {args.input}")
+    # Check if input is an audio file
+    audio_extensions = {'.wav', '.mp3', '.m4a', '.flac', '.ogg'}
+    input_path = Path(args.input)
+    is_audio = input_path.suffix.lower() in audio_extensions
     
-    # Read input file
-    transcript = read_file_content(args.input)
-    if not transcript.strip():
-        print("❌ Input file is empty")
-        return
+    if is_audio:
+        print(f"🎙️  Processing audio file: {args.input}")
+        return cmd_session_audio_summarize(args)
+    else:
+        print(f"📝 Summarizing session from text file: {args.input}")
+        
+        # Read input file
+        transcript = read_file_content(args.input)
+        if not transcript.strip():
+            print("❌ Input file is empty")
+            return
+        
+        # Get RAG context if requested
+        context_chunks = []
+        if args.use_rag:
+            print("🔍 Gathering relevant context from knowledge base...")
+            with Session(engine) as sess:
+                # Use first few lines of transcript as search query
+                search_query = transcript[:500]
+                chunks = search(sess, search_query, k=3)
+                context_chunks = [chunk.text for chunk in chunks]
+                print(f"   Found {len(context_chunks)} relevant chunks")
+        
+        # Generate session notes
+        print("🤖 Generating session notes...")
+        try:
+            with Session(engine) as sess:
+                notes = summarize_text(
+                    transcript, 
+                    campaign_id=args.campaign,
+                    context_chunks=context_chunks if context_chunks else None,
+                    db_session=sess if args.save_to_db else None,
+                    use_mock=not bool(os.getenv("OPENAI_API_KEY", "").startswith("sk-"))
+                )
+            
+            # Handle output
+            handle_session_output(args, notes)
+            
+        except Exception as e:
+            print(f"❌ Error generating session notes: {e}")
+
+def cmd_session_audio_summarize(args):
+    """Handle audio session summarize command"""
+    print(f"🎙️  Processing audio session: {args.input}")
     
     # Get RAG context if requested
     context_chunks = []
     if args.use_rag:
         print("🔍 Gathering relevant context from knowledge base...")
         with Session(engine) as sess:
-            # Use first few lines of transcript as search query
-            search_query = transcript[:500]
+            # Use audio filename as search query for initial context
+            search_query = f"session audio recording {Path(args.input).stem}"
             chunks = search(sess, search_query, k=3)
             context_chunks = [chunk.text for chunk in chunks]
             print(f"   Found {len(context_chunks)} relevant chunks")
     
-    # Generate session notes
-    print("🤖 Generating session notes...")
+    # Generate session notes from audio
+    print("🤖 Processing audio and generating session notes...")
     try:
+        huggingface_token = os.getenv("HUGGINGFACE_TOKEN")
+        if not huggingface_token:
+            print("⚠️  No HUGGINGFACE_TOKEN found. You may need to set this to access diarization models.")
+        
         with Session(engine) as sess:
-            notes = summarize_text(
-                transcript, 
+            notes = summarize_audio(
+                audio_path=args.input,
                 campaign_id=args.campaign,
                 context_chunks=context_chunks if context_chunks else None,
                 db_session=sess if args.save_to_db else None,
+                huggingface_token=huggingface_token,
                 use_mock=not bool(os.getenv("OPENAI_API_KEY", "").startswith("sk-"))
             )
         
-        # Handle output
-        if args.out == "stdout":
-            print("\n" + "="*50)
-            print(notes)
-            print("="*50)
-        elif args.out == "notion":
-            # Sync to Notion
-            print("📝 Syncing to Notion...")
-            try:
-                notion = NotionSync()
-                
-                # Test connection first
-                if not notion.test_connection():
-                    print("❌ Failed to connect to Notion. Check your NOTION_TOKEN.")
-                    print("   Saving to file instead...")
-                    output_file = f"{Path(args.input).stem}_notes.md"
-                    write_file_content(output_file, notes)
-                    return
-                
-                # Create session title
-                session_title = f"Session Notes - {Path(args.input).stem}"
-                
-                # Create Notion page
-                page = notion.create_session_page(
-                    title=session_title,
-                    content=notes,
-                    properties={
-                        "Play Group": {"select": {"name": args.play_group}},
-                        "Status": {"select": {"name": "Draft"}}        # Start as draft for review
-                    }
-                )
-                
-                print(f"✅ Session notes synced to Notion!")
-                print(f"   Page URL: {page.get('url', 'N/A')}")
-                
-            except ValueError as e:
-                # Missing environment variables
-                print(f"❌ Notion configuration error: {e}")
-                print("   Set NOTION_TOKEN and NOTION_DATABASE_ID environment variables")
-                print("   Saving to file instead...")
-                output_file = f"{Path(args.input).stem}_notes.md"
-                write_file_content(output_file, notes)
-            except Exception as e:
-                print(f"❌ Error syncing to Notion: {e}")
-                print("   Saving to file instead...")
-                output_file = f"{Path(args.input).stem}_notes.md"
-                write_file_content(output_file, notes)
-        else:
-            # Save to specified file
-            write_file_content(args.out, notes)
-        
-        print("✅ Session summarization completed!")
+        # Handle output (same as text processing)
+        handle_session_output(args, notes)
         
     except Exception as e:
-        print(f"❌ Error generating session notes: {e}")
+        print(f"❌ Error processing audio: {e}")
+        if "gated repo" in str(e).lower() or "access" in str(e).lower():
+            print("\n💡 To enable audio processing:")
+            print("1. Visit: https://huggingface.co/pyannote/speaker-diarization-community-1")
+            print("2. Click 'Agree and access repository'")
+            print("3. Create a token at: https://huggingface.co/settings/tokens")
+            print("4. Set HUGGINGFACE_TOKEN environment variable")
 
 def cmd_rag_ingest(args):
     """Handle RAG ingest command"""
@@ -152,51 +198,39 @@ def cmd_rag_ingest(args):
         print(f"❌ File not found: {args.file}")
         return
     
-    print(f"📚 Ingesting {args.file} into knowledge base...")
+    print(f"📚 Ingesting document: {args.file}")
     
     try:
         with Session(engine) as sess:
-            if Path(args.file).suffix.lower() in ['.pdf', '.md', '.markdown']:
-                doc_id = ingest_file(
-                    sess, 
-                    args.file, 
-                    title=args.title,
-                    doctype=args.doctype
-                )
-            else:
-                # Plain text file
-                content = read_file_content(args.file)
-                doc_id = ingest_text(
-                    sess,
-                    content,
-                    title=args.title or Path(args.file).stem,
-                    doctype=args.doctype or "note"
-                )
-        
-        print(f"✅ Document ingested with ID: {doc_id}")
-        
+            doc_id = ingest_file(
+                sess, 
+                args.file, 
+                title=args.title,
+                doctype=args.doctype
+            )
+            print(f"✅ Document ingested successfully with ID: {doc_id}")
     except Exception as e:
-        print(f"❌ Error ingesting file: {e}")
+        print(f"❌ Error ingesting document: {e}")
 
 def cmd_rag_query(args):
     """Handle RAG query command"""
-    print(f"🔍 Searching knowledge base for: '{args.query}'")
+    print(f"🔍 Searching knowledge base for: {args.query}")
     
     try:
         with Session(engine) as sess:
-            results = search(sess, args.query, k=args.k)
-        
-        if not results:
-            print("No results found.")
+            chunks = search(sess, args.query, k=args.k)
+            
+        if not chunks:
+            print("❌ No results found")
             return
         
-        print(f"\nFound {len(results)} results:")
+        print(f"📚 Found {len(chunks)} relevant chunks:")
         print("=" * 50)
         
-        for i, chunk in enumerate(results, 1):
-            print(f"\n{i}. Document ID: {chunk.document_id}")
-            if chunk.page:
-                print(f"   Page: {chunk.page}")
+        for i, chunk in enumerate(chunks, 1):
+            print(f"\n{i}. Relevance: {chunk.similarity:.3f}")
+            print(f"   Document: {chunk.document.title}")
+            print(f"   Type: {chunk.document.doctype}")
             if chunk.section:
                 print(f"   Section: {chunk.section}")
             
@@ -218,6 +252,7 @@ def main():
         epilog="""
 Examples:
   %(prog)s session summarize transcript.txt
+  %(prog)s session summarize audio.wav --campaign 1 --use-rag --out notion
   %(prog)s session summarize notes.md --campaign 1 --use-rag --out session_notes.md
   %(prog)s rag ingest shadowdark_rules.pdf --doctype rule
   %(prog)s rag query "How do death saves work?"
@@ -231,8 +266,8 @@ Examples:
     session_subparsers = session_parser.add_subparsers(dest='session_cmd')
     
     # Session summarize
-    summarize_parser = session_subparsers.add_parser('summarize', help='Generate session notes from transcript')
-    summarize_parser.add_argument('input', help='Input file (transcript, notes, etc.)')
+    summarize_parser = session_subparsers.add_parser('summarize', help='Generate session notes from transcript or audio')
+    summarize_parser.add_argument('input', help='Input file (transcript, audio, notes, etc.)')
     summarize_parser.add_argument('--out', default='stdout', 
                                   help='Output destination: stdout, notion, or filename (default: stdout)')
     summarize_parser.add_argument('--campaign', type=int, help='Campaign ID for database storage')
