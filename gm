@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+
+"""
+Shadowdark GM CLI Tool
+
+Command-line interface for the Shadowdark GM Assistant.
+Usage:
+    gm session summarize input.md --out notion
+    gm session summarize transcript.txt --campaign 1 --use-rag
+    gm rag ingest rules.pdf --doctype rule
+    gm rag query "How do spells work?"
+"""
+
+import argparse
+import sys
+import os
+from pathlib import Path
+from typing import Optional
+
+# Add the project root to Python path
+project_root = Path(__file__).parent
+sys.path.insert(0, str(project_root))
+
+from sqlmodel import create_engine, Session
+from dotenv import load_dotenv
+
+from core.agents.session_scribe import summarize_text
+from core.agents.rag_librarian import ingest_text, ingest_file, search
+from core.data.models import SQLModel
+
+load_dotenv()
+
+# Database setup
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg://postgres:postgres@localhost:5432/shadowdark")
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+
+def read_file_content(file_path: str) -> str:
+    """Read content from a file"""
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except Exception as e:
+        print(f"Error reading file {file_path}: {e}")
+        return ""
+
+def write_file_content(file_path: str, content: str):
+    """Write content to a file"""
+    try:
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        print(f"✅ Output written to {file_path}")
+    except Exception as e:
+        print(f"❌ Error writing file {file_path}: {e}")
+
+def cmd_session_summarize(args):
+    """Handle session summarize command"""
+    if not os.path.exists(args.input):
+        print(f"❌ Input file not found: {args.input}")
+        return
+    
+    print(f"📝 Summarizing session from: {args.input}")
+    
+    # Read input file
+    transcript = read_file_content(args.input)
+    if not transcript.strip():
+        print("❌ Input file is empty")
+        return
+    
+    # Get RAG context if requested
+    context_chunks = []
+    if args.use_rag:
+        print("🔍 Gathering relevant context from knowledge base...")
+        with Session(engine) as sess:
+            # Use first few lines of transcript as search query
+            search_query = transcript[:500]
+            chunks = search(sess, search_query, k=3)
+            context_chunks = [chunk.text for chunk in chunks]
+            print(f"   Found {len(context_chunks)} relevant chunks")
+    
+    # Generate session notes
+    print("🤖 Generating session notes...")
+    try:
+        with Session(engine) as sess:
+            notes = summarize_text(
+                transcript, 
+                campaign_id=args.campaign,
+                context_chunks=context_chunks if context_chunks else None,
+                db_session=sess if args.save_to_db else None,
+                use_mock=not bool(os.getenv("OPENAI_API_KEY", "").startswith("sk-"))
+            )
+        
+        # Handle output
+        if args.out == "stdout":
+            print("\n" + "="*50)
+            print(notes)
+            print("="*50)
+        elif args.out == "notion":
+            # TODO: Implement Notion sync
+            print("📝 Notion sync not yet implemented. Saving to file instead.")
+            output_file = f"{Path(args.input).stem}_notes.md"
+            write_file_content(output_file, notes)
+        else:
+            # Save to specified file
+            write_file_content(args.out, notes)
+        
+        print("✅ Session summarization completed!")
+        
+    except Exception as e:
+        print(f"❌ Error generating session notes: {e}")
+
+def cmd_rag_ingest(args):
+    """Handle RAG ingest command"""
+    if not os.path.exists(args.file):
+        print(f"❌ File not found: {args.file}")
+        return
+    
+    print(f"📚 Ingesting {args.file} into knowledge base...")
+    
+    try:
+        with Session(engine) as sess:
+            if Path(args.file).suffix.lower() in ['.pdf', '.md', '.markdown']:
+                doc_id = ingest_file(
+                    sess, 
+                    args.file, 
+                    title=args.title,
+                    doctype=args.doctype
+                )
+            else:
+                # Plain text file
+                content = read_file_content(args.file)
+                doc_id = ingest_text(
+                    sess,
+                    content,
+                    title=args.title or Path(args.file).stem,
+                    doctype=args.doctype or "note"
+                )
+        
+        print(f"✅ Document ingested with ID: {doc_id}")
+        
+    except Exception as e:
+        print(f"❌ Error ingesting file: {e}")
+
+def cmd_rag_query(args):
+    """Handle RAG query command"""
+    print(f"🔍 Searching knowledge base for: '{args.query}'")
+    
+    try:
+        with Session(engine) as sess:
+            results = search(sess, args.query, k=args.k)
+        
+        if not results:
+            print("No results found.")
+            return
+        
+        print(f"\nFound {len(results)} results:")
+        print("=" * 50)
+        
+        for i, chunk in enumerate(results, 1):
+            print(f"\n{i}. Document ID: {chunk.document_id}")
+            if chunk.page:
+                print(f"   Page: {chunk.page}")
+            if chunk.section:
+                print(f"   Section: {chunk.section}")
+            
+            # Show first 200 chars of content
+            preview = chunk.text[:200].replace('\n', ' ')
+            if len(chunk.text) > 200:
+                preview += "..."
+            print(f"   Content: {preview}")
+        
+        print("=" * 50)
+        
+    except Exception as e:
+        print(f"❌ Error querying knowledge base: {e}")
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Shadowdark GM Assistant CLI",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s session summarize transcript.txt
+  %(prog)s session summarize notes.md --campaign 1 --use-rag --out session_notes.md
+  %(prog)s rag ingest shadowdark_rules.pdf --doctype rule
+  %(prog)s rag query "How do death saves work?"
+        """
+    )
+    
+    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+    
+    # Session commands
+    session_parser = subparsers.add_parser('session', help='Session management')
+    session_subparsers = session_parser.add_subparsers(dest='session_cmd')
+    
+    # Session summarize
+    summarize_parser = session_subparsers.add_parser('summarize', help='Generate session notes from transcript')
+    summarize_parser.add_argument('input', help='Input file (transcript, notes, etc.)')
+    summarize_parser.add_argument('--out', default='stdout', 
+                                  help='Output destination: stdout, notion, or filename (default: stdout)')
+    summarize_parser.add_argument('--campaign', type=int, help='Campaign ID for database storage')
+    summarize_parser.add_argument('--use-rag', action='store_true', 
+                                  help='Use RAG to include relevant context from knowledge base')
+    summarize_parser.add_argument('--save-to-db', action='store_true',
+                                  help='Save session data to database')
+    
+    # RAG commands
+    rag_parser = subparsers.add_parser('rag', help='Knowledge base management')
+    rag_subparsers = rag_parser.add_subparsers(dest='rag_cmd')
+    
+    # RAG ingest
+    ingest_parser = rag_subparsers.add_parser('ingest', help='Add documents to knowledge base')
+    ingest_parser.add_argument('file', help='File to ingest (PDF, Markdown, or text)')
+    ingest_parser.add_argument('--title', help='Document title (defaults to filename)')
+    ingest_parser.add_argument('--doctype', choices=['rule', 'note', 'transcript', 'compendium', 'other'],
+                               help='Document type')
+    
+    # RAG query
+    query_parser = rag_subparsers.add_parser('query', help='Search knowledge base')
+    query_parser.add_argument('query', help='Search query')
+    query_parser.add_argument('--k', type=int, default=5, help='Number of results to return')
+    
+    args = parser.parse_args()
+    
+    if args.command == 'session':
+        if args.session_cmd == 'summarize':
+            cmd_session_summarize(args)
+        else:
+            session_parser.print_help()
+    elif args.command == 'rag':
+        if args.rag_cmd == 'ingest':
+            cmd_rag_ingest(args)
+        elif args.rag_cmd == 'query':
+            cmd_rag_query(args)
+        else:
+            rag_parser.print_help()
+    else:
+        parser.print_help()
+
+if __name__ == '__main__':
+    main()
