@@ -118,7 +118,7 @@ def cmd_session_summarize(args):
                     content=notes,
                     properties={
                         "Play Group": {"select": {"name": args.play_group}},
-                        "Status": {"select": {"name": "Complete"}}     # Mark as complete when synced
+                        "Status": {"select": {"name": "Draft"}}        # Start as draft for review
                     }
                 )
                 

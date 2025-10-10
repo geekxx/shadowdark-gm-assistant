@@ -71,7 +71,7 @@ def summarize(payload: SummarizeIn):
                     content=notes,
                     properties={
                         "Play Group": {"select": {"name": payload.play_group or "Online"}},
-                        "Status": {"select": {"name": "Complete"}}     # Mark as complete when synced
+                        "Status": {"select": {"name": "Draft"}}        # Start as draft for review
                     }
                 )
                 notion_page_url = page.get('url')
