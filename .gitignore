@@ -168,3 +168,15 @@ redis_data/
 # Temporary test files in root directory (tests/ directory is included)
 /test_*.py
 /*_test.py
+
+# Audio files (can be large and shouldn't be committed)
+*.m4a
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.aac
+
+# Temporary audio processing files
+temp_*.wav
+converted_*.wav
