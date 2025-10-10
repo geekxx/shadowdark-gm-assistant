@@ -16,6 +16,7 @@ diarized transcripts w        # Try to process original file first, convert only
                 converted_audio = wav_path if wav_path != audio_path else Nonepeaker labels and timestamps.
 """
 
+import os
 import logging
 import tempfile
 import subprocess
@@ -25,6 +26,7 @@ import torch
 import librosa
 import soundfile as sf
 from dataclasses import dataclass
+from openai import OpenAI
 
 # Import pyannote.audio components
 from pyannote.audio import Pipeline
@@ -68,16 +70,21 @@ class SpeakerDiarizer:
     4. Handle various audio formats
     """
     
-    def __init__(self, huggingface_token: Optional[str] = None):
+    def __init__(self, huggingface_token: Optional[str] = None, openai_api_key: Optional[str] = None):
         """
         Initialize the diarizer.
         
         Args:
             huggingface_token: HuggingFace access token for accessing models
+            openai_api_key: OpenAI API key for Whisper transcription
         """
         self.huggingface_token = huggingface_token
         self.pipeline = None
         self._supported_formats = {'.wav', '.mp3', '.m4a', '.flac', '.ogg'}
+        
+        # Initialize OpenAI client for Whisper transcription
+        self.openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
+        self.openai_client = OpenAI(api_key=self.openai_api_key) if self.openai_api_key else None
         
     def _load_pipeline(self):
         """Load the pyannote.audio diarization pipeline."""
@@ -128,7 +135,6 @@ class SpeakerDiarizer:
                 '-acodec', 'pcm_s16le',     # 16-bit PCM
                 '-ar', '16000',             # 16kHz sample rate (pyannote standard)
                 '-ac', '1',                 # Mono channel
-                '-t', '300',                # Limit to 5 minutes for testing (remove this later)
                 '-af', 'aresample=16000:resampler=soxr',  # High-quality resampling
                 '-y',                       # Overwrite output file
                 '-loglevel', 'error',       # Suppress verbose output
@@ -344,18 +350,28 @@ class SpeakerDiarizer:
             lines.append(f"- **{speaker_id}**: {speaking_time:.1f}s ({percentage:.1f}%)")
         lines.append("")
         
-        # Timeline
+        # Timeline with transcript content
         lines.append("## Speaker Timeline")
         lines.append("")
         
-        for segment in diarization_result.segments:
+        # Align transcript with speakers if available
+        aligned_transcript = {}
+        if transcript_text:
+            logger.info("📝 Aligning transcript with speaker segments...")
+            aligned_transcript = self._align_transcript_with_speakers(transcript_text, diarization_result.segments)
+        
+        for i, segment in enumerate(diarization_result.segments):
             timestamp = f"[{self._format_time(segment.start_time)} - {self._format_time(segment.end_time)}]"
             lines.append(f"**{segment.speaker_id}** {timestamp}")
             
-            if transcript_text:
-                # TODO: Implement transcript alignment with speaker segments
-                lines.append("(Transcript alignment not yet implemented)")
+            if i in aligned_transcript and aligned_transcript[i].strip():
+                # Use aligned transcript content
+                lines.append(aligned_transcript[i].strip())
+            elif transcript_text:
+                # Has transcript but alignment failed for this segment
+                lines.append("(No content aligned to this segment)")
             else:
+                # No transcript provided
                 lines.append("(Audio segment - no transcript provided)")
             lines.append("")
         
@@ -366,6 +382,140 @@ class SpeakerDiarizer:
         minutes = int(seconds // 60)
         seconds = int(seconds % 60)
         return f"{minutes:02d}:{seconds:02d}"
+    
+    def transcribe_audio(self, audio_path: str) -> Optional[str]:
+        """
+        Transcribe audio file using OpenAI Whisper API.
+        
+        Args:
+            audio_path: Path to the audio file
+            
+        Returns:
+            Transcript text or None if transcription fails
+        """
+        if not self.openai_client:
+            logger.warning("OpenAI client not available - cannot transcribe audio")
+            return None
+            
+        audio_path = Path(audio_path)
+        
+        if not audio_path.exists():
+            logger.error(f"Audio file not found: {audio_path}")
+            return None
+        
+        try:
+            logger.info("🎙️  Starting speech-to-text transcription with OpenAI Whisper...")
+            
+            # Check file size (Whisper has 25MB limit)
+            file_size_mb = audio_path.stat().st_size / (1024 * 1024)
+            if file_size_mb > 25:
+                logger.warning(f"⚠️  Audio file is {file_size_mb:.1f}MB (Whisper limit: 25MB)")
+                logger.info("🔄 Consider splitting large files for better results")
+            
+            # Open and transcribe the audio file
+            with open(audio_path, "rb") as audio_file:
+                transcript = self.openai_client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file,
+                    response_format="text"
+                )
+            
+            logger.info("✅ Speech-to-text transcription completed successfully")
+            return transcript
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to transcribe audio: {e}")
+            return None
+    
+    def _align_transcript_with_speakers(self, transcript: str, segments: List[SpeakerSegment]) -> Dict[int, str]:
+        """
+        Align transcript text with speaker segments using simple word distribution.
+        
+        This is a basic implementation that distributes words proportionally
+        across speaker segments based on duration.
+        
+        Args:
+            transcript: Full transcript text
+            segments: List of speaker segments with timing
+            
+        Returns:
+            Dictionary mapping segment index to transcript text
+        """
+        if not transcript or not segments:
+            return {}
+        
+        # Split transcript into words
+        words = transcript.strip().split()
+        if not words:
+            return {}
+        
+        # Calculate total duration
+        total_duration = sum(segment.duration for segment in segments)
+        if total_duration == 0:
+            return {}
+        
+        # Distribute words proportionally based on segment duration
+        aligned_segments = {}
+        current_word_idx = 0
+        
+        for i, segment in enumerate(segments):
+            # Calculate proportion of words for this segment
+            duration_ratio = segment.duration / total_duration
+            words_for_segment = max(1, int(len(words) * duration_ratio))
+            
+            # Get words for this segment
+            start_idx = current_word_idx
+            end_idx = min(current_word_idx + words_for_segment, len(words))
+            
+            if start_idx < len(words):
+                segment_words = words[start_idx:end_idx]
+                aligned_segments[i] = " ".join(segment_words)
+                current_word_idx = end_idx
+            else:
+                aligned_segments[i] = ""
+        
+        # If there are remaining words, add them to the last segment
+        if current_word_idx < len(words):
+            remaining_words = words[current_word_idx:]
+            last_segment_idx = len(segments) - 1
+            if last_segment_idx in aligned_segments:
+                aligned_segments[last_segment_idx] += " " + " ".join(remaining_words)
+            else:
+                aligned_segments[last_segment_idx] = " ".join(remaining_words)
+        
+        return aligned_segments
+    
+    def diarize_and_transcribe(
+        self,
+        audio_path: str,
+        min_speakers: Optional[int] = None,
+        max_speakers: Optional[int] = None
+    ) -> Tuple[DiarizationResult, Optional[str]]:
+        """
+        Perform both speaker diarization and speech-to-text transcription.
+        
+        Args:
+            audio_path: Path to the audio file
+            min_speakers: Minimum number of speakers (optional)
+            max_speakers: Maximum number of speakers (optional)
+            
+        Returns:
+            Tuple of (DiarizationResult, transcript_text)
+        """
+        logger.info("🎵 Starting combined diarization and transcription...")
+        
+        # Step 1: Perform speaker diarization
+        diarization_result = self.diarize_audio(audio_path, min_speakers, max_speakers)
+        
+        # Step 2: Transcribe the audio (if OpenAI client available)
+        transcript_text = None
+        if self.openai_client:
+            transcript_text = self.transcribe_audio(audio_path)
+        else:
+            logger.warning("⚠️  OpenAI client not available - skipping transcription")
+        
+        logger.info("🎉 Combined processing completed!")
+        return diarization_result, transcript_text
     
     def get_speaker_mapping(self, diarization_result: DiarizationResult) -> Dict[str, str]:
         """

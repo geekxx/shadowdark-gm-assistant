@@ -76,7 +76,14 @@ def _build_user_prompt(transcript: str, context_chunks: List[str] = None) -> str
         context = "\n\n".join(context_chunks)
         prompt += f"\n\nRelevant context from previous sessions and rules:\n{context}"
     
-    prompt += "\n\nPlease format the output exactly according to the template, following Shadowdark style guidelines."
+    prompt += """\n\nCRITICAL INSTRUCTIONS FOR CHARACTER NAMES:
+- For Cast of Characters, ONLY use speaker labels that appear in the transcript (GM, Player 1, Player 2, etc.)
+- DO NOT make up character names like "Kira", "Thane", "Erasmus" etc. unless they are explicitly spoken in the dialogue
+- If actual character names are mentioned in the spoken dialogue, use those instead of speaker labels
+- If no character names are spoken, use the speaker labels (GM, Player 1, etc.) as the character identifiers
+- For NPCs, ONLY list characters that are actually mentioned by name in the spoken dialogue
+
+Please format the output exactly according to the template, following Shadowdark style guidelines."""
     return prompt
 
 def _estimate_tokens(text: str) -> int:
@@ -464,31 +471,29 @@ def summarize_audio(
         if use_mock:
             return _mock_llm_response("Audio processing not implemented in mock mode")
         
-        # Initialize diarizer
-        diarizer = SpeakerDiarizer(huggingface_token=huggingface_token)
+        # Initialize diarizer with both HuggingFace and OpenAI tokens
+        openai_key = os.getenv("OPENAI_API_KEY")
+        diarizer = SpeakerDiarizer(huggingface_token=huggingface_token, openai_api_key=openai_key)
         
-        # Perform diarization with progress updates
+        # Perform combined diarization and transcription with progress updates
         print(f"🎙️  Processing audio file: {audio_path}")
-        print("📊 Step 1/4: Performing speaker diarization...")
-        diarization_result = diarizer.diarize_audio(audio_path, min_speakers=2, max_speakers=6)
+        print("📊 Step 1/4: Performing speaker diarization and transcription...")
+        diarization_result, transcript_text = diarizer.diarize_and_transcribe(audio_path, min_speakers=2, max_speakers=6)
         
         # Create speaker mapping (GM + Players)
         print("📊 Step 2/4: Creating speaker mapping...")
         speaker_mapping = diarizer.get_speaker_mapping(diarization_result)
         print(f"🏷️  Identified speakers: {list(speaker_mapping.values())}")
         
-        # Create diarized transcript
-        print("📊 Step 3/4: Generating speaker timeline...")
-        diarized_transcript = diarizer.create_speaker_transcript(diarization_result)
+        # Create diarized transcript with actual speech content
+        print("📊 Step 3/4: Generating speaker timeline with transcript...")
+        diarized_transcript = diarizer.create_speaker_transcript(diarization_result, transcript_text)
         
         # Apply readable speaker names
         enhanced_transcript = diarizer.apply_speaker_mapping(diarized_transcript, speaker_mapping)
-        
-        # TODO: Integrate with speech-to-text to get actual transcript content
-        # For now, we'll use the diarization timeline as the transcript
         transcript_for_notes = enhanced_transcript
         
-        # Generate session notes using the enhanced transcript
+        # Generate session notes using the enhanced transcript with actual content
         print("📊 Step 4/4: Generating AI session notes...")
         print("🤖 Processing with AI to create structured session notes...")
         return summarize_text(
