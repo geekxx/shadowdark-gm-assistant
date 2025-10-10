@@ -77,7 +77,9 @@ def handle_session_output(args, notes):
             page_url = notion.create_session_page(
                 title=f"Session Notes - {Path(args.input).stem}",
                 content=notes,
-                play_group=getattr(args, 'play_group', 'Online')
+                properties={
+                    "Play Group": {"select": {"name": getattr(args, 'play_group', 'Online')}}
+                }
             )
             
             if page_url:

@@ -2,7 +2,18 @@
 Speaker Diarization Agent for Shadowdark GM Assistant
 
 This agent processes audio files to identify different speakers and create 
-diarized transcripts with speaker labels and timestamps.
+diarized transcripts w        # Try to process original file first, convert only if needed
+        converted_audio = None
+        try:
+            # Try original file first
+            diarization = self.pipeline(str(audio_path))
+            logger.info(f"Successfully processed {audio_path.suffix} file directly")
+            wav_path = audio_path
+        except Exception as e:
+            logger.info(f"Direct processing failed, attempting conversion: {e}")
+            try:
+                wav_path = self._convert_audio_format(audio_path)
+                converted_audio = wav_path if wav_path != audio_path else Nonepeaker labels and timestamps.
 """
 
 import logging
@@ -155,21 +166,27 @@ class SpeakerDiarizer:
         # Load pipeline
         self._load_pipeline()
         
-        # Convert to WAV if needed
+        # Try to process original file first, convert only if needed
         converted_audio = None
+        wav_path = audio_path
+        
         try:
-            wav_path = self._convert_audio_format(audio_path)
-            converted_audio = wav_path if wav_path != audio_path else None
-            
             # Set speaker constraints if provided
             if min_speakers is not None:
                 self.pipeline.pipeline.clustering.min_clusters = min_speakers
             if max_speakers is not None:
                 self.pipeline.pipeline.clustering.max_clusters = max_speakers
             
-            # Perform diarization
+            # Try original file first
             logger.info(f"Starting diarization of {audio_path.name}...")
-            diarization = self.pipeline(str(wav_path))
+            try:
+                diarization = self.pipeline(str(audio_path))
+                logger.info(f"Successfully processed {audio_path.suffix} file directly")
+            except Exception as direct_error:
+                logger.info(f"Direct processing failed, attempting conversion: {direct_error}")
+                wav_path = self._convert_audio_format(audio_path)
+                converted_audio = wav_path if wav_path != audio_path else None
+                diarization = self.pipeline(str(wav_path))
             
             # Process results
             segments = []
