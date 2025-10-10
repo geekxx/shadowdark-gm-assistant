@@ -40,6 +40,7 @@ A multi-agent AI assistant for running Shadowdark RPG campaigns end-to-end. This
    ```bash
    cp .env.example .env
    # Edit .env with your OpenAI API key (optional)
+   # For Notion integration, see NOTION_SETUP.md
    ```
 
 4. **Make CLI executable:**
@@ -51,9 +52,11 @@ A multi-agent AI assistant for running Shadowdark RPG campaigns end-to-end. This
 
 ### CLI Commands
 
-**Generate session notes from transcript:**
+**Generate session notes:**
 ```bash
-./gm session summarize my_transcript.md --use-rag --out session_notes.md
+./gm session summarize transcript.txt --out session_notes.md
+./gm session summarize notes.md --campaign 1 --use-rag
+./gm session summarize transcript.txt --out notion  # Sync to Notion!
 ```
 
 **Build knowledge base:**
@@ -116,6 +119,7 @@ shadowdark-gm/
 - **Session Scribe**: Transforms raw transcripts into structured Shadowdark-style notes
 - **RAG Librarian**: Manages document ingestion, chunking, and semantic search
 - **Vector Store**: PostgreSQL + pgvector for embedding similarity search
+- **Notion Integration**: Syncs session notes directly to Notion pages
 - **API Layer**: FastAPI with automatic documentation and validation
 
 ## 🎲 Shadowdark Style Guide
@@ -166,6 +170,7 @@ This project demonstrates:
 - **CLI Design**: User-friendly command-line interfaces
 - **Vector Databases**: Semantic search with PostgreSQL + pgvector
 - **LLM Integration**: OpenAI API with fallback strategies
+- **External API Integration**: Notion API for seamless workflow integration
 
 ## 🔮 Roadmap
 
@@ -174,8 +179,8 @@ This project demonstrates:
 - [x] RAG Librarian with smart chunking
 - [x] CLI interface
 - [x] REST API endpoints
-- [ ] Golden dataset and evaluation framework
-- [ ] Basic Notion integration
+- [x] Golden dataset and evaluation framework
+- [x] Basic Notion integration
 
 ### Sprint 2 (Audio)
 - [ ] Diarizer agent (WhisperX integration)

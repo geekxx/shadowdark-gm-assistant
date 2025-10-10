@@ -10,3 +10,4 @@ pgvector==0.3.3
 python-dotenv==1.0.1
 markdown-it-py==3.0.0
 pypdf==4.3.1
+notion-client==2.5.0

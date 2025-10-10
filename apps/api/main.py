@@ -28,6 +28,8 @@ class SummarizeIn(BaseModel):
     campaign_id: Optional[int] = None
     use_rag: bool = False
     save_to_db: bool = False
+    sync_to_notion: bool = False
+    session_title: Optional[str] = None
 
 @app.post("/sessions/summarize")
 def summarize(payload: SummarizeIn):
@@ -53,7 +55,40 @@ def summarize(payload: SummarizeIn):
             use_mock=not bool(os.getenv("OPENAI_API_KEY", "").startswith("sk-"))
         )
     
-    return {"notes": notes}
+    # Handle Notion sync if requested
+    notion_page_url = None
+    if payload.sync_to_notion:
+        try:
+            from core.integrations.notion_sync import NotionSync
+            
+            notion = NotionSync()
+            if notion.test_connection():
+                session_title = payload.session_title or "Session Notes"
+                
+                page = notion.create_session_page(
+                    title=session_title,
+                    content=notes,
+                    properties={
+                        "Campaign": {"select": {"name": f"Campaign {payload.campaign_id}"}} if payload.campaign_id else None,
+                        "Date": {"date": {"start": "2025-10-10"}}  # TODO: Use actual date
+                    }
+                )
+                notion_page_url = page.get('url')
+            else:
+                raise Exception("Failed to connect to Notion API")
+                
+        except Exception as e:
+            # If Notion sync fails, we still return the notes but with an error
+            return {
+                "notes": notes,
+                "notion_error": str(e),
+                "notion_page_url": None
+            }
+    
+    return {
+        "notes": notes,
+        "notion_page_url": notion_page_url
+    }
 
 @app.get("/sessions/{session_id}/notes")
 def get_session_notes(session_id: int):

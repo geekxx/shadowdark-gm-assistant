@@ -27,6 +27,7 @@ from dotenv import load_dotenv
 from core.agents.session_scribe import summarize_text
 from core.agents.rag_librarian import ingest_text, ingest_file, search
 from core.data.models import SQLModel
+from core.integrations.notion_sync import NotionSync
 
 load_dotenv()
 
@@ -95,10 +96,47 @@ def cmd_session_summarize(args):
             print(notes)
             print("="*50)
         elif args.out == "notion":
-            # TODO: Implement Notion sync
-            print("📝 Notion sync not yet implemented. Saving to file instead.")
-            output_file = f"{Path(args.input).stem}_notes.md"
-            write_file_content(output_file, notes)
+            # Sync to Notion
+            print("📝 Syncing to Notion...")
+            try:
+                notion = NotionSync()
+                
+                # Test connection first
+                if not notion.test_connection():
+                    print("❌ Failed to connect to Notion. Check your NOTION_TOKEN.")
+                    print("   Saving to file instead...")
+                    output_file = f"{Path(args.input).stem}_notes.md"
+                    write_file_content(output_file, notes)
+                    return
+                
+                # Create session title
+                session_title = f"Session Notes - {Path(args.input).stem}"
+                
+                # Create Notion page
+                page = notion.create_session_page(
+                    title=session_title,
+                    content=notes,
+                    properties={
+                        "Campaign": {"select": {"name": f"Campaign {args.campaign}"}} if args.campaign else None,
+                        "Date": {"date": {"start": "2025-10-10"}} # TODO: Use actual date
+                    }
+                )
+                
+                print(f"✅ Session notes synced to Notion!")
+                print(f"   Page URL: {page.get('url', 'N/A')}")
+                
+            except ValueError as e:
+                # Missing environment variables
+                print(f"❌ Notion configuration error: {e}")
+                print("   Set NOTION_TOKEN and NOTION_DATABASE_ID environment variables")
+                print("   Saving to file instead...")
+                output_file = f"{Path(args.input).stem}_notes.md"
+                write_file_content(output_file, notes)
+            except Exception as e:
+                print(f"❌ Error syncing to Notion: {e}")
+                print("   Saving to file instead...")
+                output_file = f"{Path(args.input).stem}_notes.md"
+                write_file_content(output_file, notes)
         else:
             # Save to specified file
             write_file_content(args.out, notes)

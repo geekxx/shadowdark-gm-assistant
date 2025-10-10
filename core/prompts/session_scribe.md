@@ -15,4 +15,6 @@ Treasure & XP Hooks — bullet list.
 
 Rumors & Leads — bullet list.
 
+Character Development - bullet list.
+
 Prep For Next — 3–5 items.
