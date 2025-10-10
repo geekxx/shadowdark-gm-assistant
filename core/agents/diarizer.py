@@ -128,7 +128,8 @@ class SpeakerDiarizer:
                 '-acodec', 'pcm_s16le',     # 16-bit PCM
                 '-ar', '16000',             # 16kHz sample rate (pyannote standard)
                 '-ac', '1',                 # Mono channel
-                '-af', 'aresample=16000',   # Ensure exact resampling
+                '-t', '300',                # Limit to 5 minutes for testing (remove this later)
+                '-af', 'aresample=16000:resampler=soxr',  # High-quality resampling
                 '-y',                       # Overwrite output file
                 '-loglevel', 'error',       # Suppress verbose output
                 str(temp_wav)
@@ -212,23 +213,81 @@ class SpeakerDiarizer:
             segments = []
             speaker_stats = {}
             
-            for segment, speaker in diarization.itertracks(yield_label=True):
-                speaker_segment = SpeakerSegment(
-                    start_time=segment.start,
-                    end_time=segment.end,
-                    speaker_id=speaker,
-                    duration=segment.duration
-                )
-                segments.append(speaker_segment)
-                
-                # Update speaker statistics
-                if speaker not in speaker_stats:
-                    speaker_stats[speaker] = 0
-                speaker_stats[speaker] += segment.duration
+            # Handle pyannote.audio 4.x API - diarization is an Annotation object
+            try:
+                # For pyannote.audio 4.x, use the track() method to iterate
+                if hasattr(diarization, 'itertracks'):
+                    # pyannote 3.x API
+                    for segment, _, speaker in diarization.itertracks(yield_label=True):
+                        speaker_segment = SpeakerSegment(
+                            start_time=segment.start,
+                            end_time=segment.end,
+                            speaker_id=speaker,
+                            duration=segment.duration
+                        )
+                        segments.append(speaker_segment)
+                        
+                        # Update speaker statistics
+                        if speaker not in speaker_stats:
+                            speaker_stats[speaker] = 0
+                        speaker_stats[speaker] += segment.duration
+                        
+                elif hasattr(diarization, 'speaker_diarization'):
+                    # pyannote 4.x API - DiarizeOutput object
+                    annotation = diarization.speaker_diarization
+                    logger.info(f"Got speaker_diarization annotation: {type(annotation)}")
+                    
+                    # The annotation should have itertracks method
+                    if hasattr(annotation, 'itertracks'):
+                        for segment, _, speaker in annotation.itertracks(yield_label=True):
+                            speaker_segment = SpeakerSegment(
+                                start_time=segment.start,
+                                end_time=segment.end,
+                                speaker_id=speaker,
+                                duration=segment.duration
+                            )
+                            segments.append(speaker_segment)
+                            
+                            # Update speaker statistics
+                            if speaker not in speaker_stats:
+                                speaker_stats[speaker] = 0
+                            speaker_stats[speaker] += segment.duration
+                    else:
+                        # Try for_json if available
+                        if hasattr(annotation, 'for_json'):
+                            json_data = annotation.for_json()
+                            for item in json_data['content']:
+                                segment_info = item['segment']
+                                speaker = item['label']
+                                start_time = segment_info['start']
+                                end_time = segment_info['end']
+                                duration = end_time - start_time
+                                
+                                speaker_segment = SpeakerSegment(
+                                    start_time=start_time,
+                                    end_time=end_time,
+                                    speaker_id=speaker,
+                                    duration=duration
+                                )
+                                segments.append(speaker_segment)
+                                
+                                # Update speaker statistics
+                                if speaker not in speaker_stats:
+                                    speaker_stats[speaker] = 0
+                                speaker_stats[speaker] += duration
+                        else:
+                            raise Exception(f"Annotation object has no supported iteration method: {type(annotation)}")
+                else:
+                    raise Exception(f"Unsupported diarization object type: {type(diarization)}")
+                    
+            except Exception as e:
+                logger.error(f"Error processing diarization results: {e}")
+                logger.info(f"Diarization object type: {type(diarization)}")
+                logger.info(f"Available methods: {[method for method in dir(diarization) if not method.startswith('_')]}")
+                raise
             
-            # Get audio duration
-            audio_data, _ = librosa.load(str(wav_path), sr=None)
-            total_duration = librosa.get_duration(y=audio_data)
+            # Calculate total duration from segments (avoids librosa issues)
+            total_duration = max(segment.end_time for segment in segments) if segments else 0.0
             
             # Sort segments by start time
             segments.sort(key=lambda s: s.start_time)
