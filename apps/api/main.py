@@ -30,6 +30,7 @@ class SummarizeIn(BaseModel):
     save_to_db: bool = False
     sync_to_notion: bool = False
     session_title: Optional[str] = None
+    play_group: Optional[str] = "Online"  # Default to Online
 
 @app.post("/sessions/summarize")
 def summarize(payload: SummarizeIn):
@@ -69,8 +70,8 @@ def summarize(payload: SummarizeIn):
                     title=session_title,
                     content=notes,
                     properties={
-                        "Campaign": {"multi_select": [{"name": f"Campaign {payload.campaign_id}"}]} if payload.campaign_id else None,
-                        "Date": {"date": {"start": "2025-10-10"}}  # TODO: Use actual date
+                        "Play Group": {"select": {"name": payload.play_group or "Online"}},
+                        "Status": {"select": {"name": "Complete"}}     # Mark as complete when synced
                     }
                 )
                 notion_page_url = page.get('url')

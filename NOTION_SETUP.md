@@ -25,10 +25,9 @@ If you want session notes to go into a specific database:
 1. Create a new page in Notion
 2. Add a database (full page)
 3. Set up these properties:
-   - **Name** (Title) - for session titles
-   - **Status** (Select) - Draft, Complete, etc.
-   - **Type** (Select) - Session Notes, etc.
-   - **Campaign** (Select) - Campaign names
+   - **Session Name** (Title) - for session titles
+   - **Status** (Select) - Draft, Complete
+   - **Play Group** (Select) - Post 161, Online
    - **Date** (Date) - session date
 4. Copy the database ID from the URL:
    - URL: `https://notion.so/workspace/database-id?v=view-id`
@@ -69,8 +68,8 @@ python test_notion.py
 # Summarize and sync to Notion
 ./gm session summarize transcript.txt --out notion
 
-# With campaign and RAG context
-./gm session summarize notes.md --campaign 1 --use-rag --out notion
+# With play group and RAG context
+./gm session summarize notes.md --play-group "Post 161" --use-rag --out notion
 ```
 
 ### API Usage
@@ -83,7 +82,7 @@ curl -X POST "http://localhost:8000/sessions/summarize" \
     "text": "Your session transcript here...",
     "sync_to_notion": true,
     "session_title": "Session 5: The Haunted Tower",
-    "campaign_id": 1
+    "play_group": "Post 161"
   }'
 ```
 

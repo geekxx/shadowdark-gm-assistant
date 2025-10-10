@@ -57,16 +57,17 @@ class NotionSync:
                 "or pass database_id parameter."
             )
         
-        # Default properties
+        # Default properties - match the updated database schema
         page_properties = {
-            "Name": {"title": [{"text": {"content": title}}]},
-            "Status": {"multi_select": [{"name": "Draft"}]},
-            "Type": {"multi_select": [{"name": "Session Notes"}]}
+            "Session Name": {"title": [{"text": {"content": title}}]},
+            "Status": {"select": {"name": "Draft"}},
+            "Date": {"date": {"start": "2025-10-10"}}  # TODO: Use actual session date
         }
         
-        # Add custom properties
+        # Add custom properties (filter out None values)
         if properties:
-            page_properties.update(properties)
+            filtered_props = {k: v for k, v in properties.items() if v is not None}
+            page_properties.update(filtered_props)
         
         # Convert markdown content to Notion blocks
         blocks = self._markdown_to_blocks(content)

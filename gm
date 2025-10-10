@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/jeffrey.heinen/projects/shadowdark-gm/.venv/bin/python
 
 """
 Shadowdark GM CLI Tool
@@ -117,8 +117,8 @@ def cmd_session_summarize(args):
                     title=session_title,
                     content=notes,
                     properties={
-                        "Campaign": {"multi_select": [{"name": f"Campaign {args.campaign}"}]} if args.campaign else None,
-                        "Date": {"date": {"start": "2025-10-10"}} # TODO: Use actual date
+                        "Play Group": {"select": {"name": args.play_group}},
+                        "Status": {"select": {"name": "Complete"}}     # Mark as complete when synced
                     }
                 )
                 
@@ -240,6 +240,8 @@ Examples:
                                   help='Use RAG to include relevant context from knowledge base')
     summarize_parser.add_argument('--save-to-db', action='store_true',
                                   help='Save session data to database')
+    summarize_parser.add_argument('--play-group', choices=['Post 161', 'Online'], 
+                                  default='Online', help='Play group for Notion (default: Online)')
     
     # RAG commands
     rag_parser = subparsers.add_parser('rag', help='Knowledge base management')

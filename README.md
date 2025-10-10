@@ -56,7 +56,7 @@ A multi-agent AI assistant for running Shadowdark RPG campaigns end-to-end. This
 ```bash
 ./gm session summarize transcript.txt --out session_notes.md
 ./gm session summarize notes.md --campaign 1 --use-rag
-./gm session summarize transcript.txt --out notion  # Sync to Notion!
+./gm session summarize transcript.txt --out notion --play-group "Post 161"  # Sync to Notion!
 ```
 
 **Build knowledge base:**
