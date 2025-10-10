@@ -467,15 +467,18 @@ def summarize_audio(
         # Initialize diarizer
         diarizer = SpeakerDiarizer(huggingface_token=huggingface_token)
         
-        # Perform diarization
+        # Perform diarization with progress updates
         print(f"🎙️  Processing audio file: {audio_path}")
+        print("📊 Step 1/4: Performing speaker diarization...")
         diarization_result = diarizer.diarize_audio(audio_path, min_speakers=2, max_speakers=6)
         
         # Create speaker mapping (GM + Players)
+        print("📊 Step 2/4: Creating speaker mapping...")
         speaker_mapping = diarizer.get_speaker_mapping(diarization_result)
         print(f"🏷️  Identified speakers: {list(speaker_mapping.values())}")
         
         # Create diarized transcript
+        print("📊 Step 3/4: Generating speaker timeline...")
         diarized_transcript = diarizer.create_speaker_transcript(diarization_result)
         
         # Apply readable speaker names
@@ -486,6 +489,8 @@ def summarize_audio(
         transcript_for_notes = enhanced_transcript
         
         # Generate session notes using the enhanced transcript
+        print("📊 Step 4/4: Generating AI session notes...")
+        print("🤖 Processing with AI to create structured session notes...")
         return summarize_text(
             transcript=transcript_for_notes,
             campaign_id=campaign_id,

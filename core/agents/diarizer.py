@@ -18,6 +18,7 @@ diarized transcripts w        # Try to process original file first, convert only
 
 import logging
 import tempfile
+import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import torch
@@ -121,13 +122,24 @@ class SpeakerDiarizer:
         temp_wav = Path(tempfile.mktemp(suffix='.wav'))
         
         try:
-            # Load audio with librosa (handles many formats)
-            audio_data, sample_rate = librosa.load(str(audio_path), sr=None)
+            # Use ffmpeg for robust audio conversion with pyannote-compatible settings
+            cmd = [
+                'ffmpeg', '-i', str(audio_path), 
+                '-acodec', 'pcm_s16le',     # 16-bit PCM
+                '-ar', '16000',             # 16kHz sample rate (pyannote standard)
+                '-ac', '1',                 # Mono channel
+                '-af', 'aresample=16000',   # Ensure exact resampling
+                '-y',                       # Overwrite output file
+                '-loglevel', 'error',       # Suppress verbose output
+                str(temp_wav)
+            ]
             
-            # Save as WAV
-            sf.write(str(temp_wav), audio_data, sample_rate)
-            logger.info(f"Converted {audio_path.suffix} to WAV format")
-            
+            # Run ffmpeg conversion
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                raise Exception(f"FFmpeg conversion failed: {result.stderr}")
+                
+            logger.info(f"Converted {audio_path.suffix} to WAV format using ffmpeg")
             return temp_wav
             
         except Exception as e:
@@ -175,21 +187,28 @@ class SpeakerDiarizer:
             # Note: pyannote clustering constraints are set during pipeline creation
             # For runtime constraints, we'll need to modify the approach
             if min_speakers is not None or max_speakers is not None:
-                logger.info(f"Speaker constraints requested: min={min_speakers}, max={max_speakers}")
+                logger.info(f"🎯 Speaker constraints: min={min_speakers}, max={max_speakers}")
                 logger.info("Note: Runtime speaker constraints not yet implemented")
             
             # Try original file first
-            logger.info(f"Starting diarization of {audio_path.name}...")
+            logger.info(f"🎵 Starting diarization of {audio_path.name}...")
+            logger.info("📊 This may take a few minutes depending on audio length...")
+            
             try:
+                logger.info("🔍 Analyzing audio with ML model...")
                 diarization = self.pipeline(str(audio_path))
-                logger.info(f"Successfully processed {audio_path.suffix} file directly")
+                logger.info(f"✅ Successfully processed {audio_path.suffix} file directly")
             except Exception as direct_error:
-                logger.info(f"Direct processing failed, attempting conversion: {direct_error}")
+                logger.info(f"⚠️  Direct processing failed, converting audio format...")
+                logger.info(f"   Error details: {direct_error}")
+                logger.info("🔄 Converting audio to compatible format...")
                 wav_path = self._convert_audio_format(audio_path)
                 converted_audio = wav_path if wav_path != audio_path else None
+                logger.info("🔍 Re-analyzing converted audio...")
                 diarization = self.pipeline(str(wav_path))
             
             # Process results
+            logger.info("📝 Processing diarization results...")
             segments = []
             speaker_stats = {}
             
@@ -214,9 +233,18 @@ class SpeakerDiarizer:
             # Sort segments by start time
             segments.sort(key=lambda s: s.start_time)
             
+            # Log completion summary
+            num_speakers = len(speaker_stats)
+            logger.info(f"🎉 Diarization completed successfully!")
+            logger.info(f"   📊 Detected {num_speakers} speakers in {total_duration:.1f} seconds")
+            logger.info(f"   🗣️  Speaker breakdown:")
+            for speaker_id, duration in speaker_stats.items():
+                percentage = duration/total_duration*100 if total_duration > 0 else 0
+                logger.info(f"      {speaker_id}: {duration:.1f}s ({percentage:.1f}%)")
+            
             result = DiarizationResult(
                 segments=segments,
-                num_speakers=len(speaker_stats),
+                num_speakers=num_speakers,  
                 total_duration=total_duration,
                 speaker_stats=speaker_stats
             )
