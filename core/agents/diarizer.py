@@ -172,10 +172,11 @@ class SpeakerDiarizer:
         
         try:
             # Set speaker constraints if provided
-            if min_speakers is not None:
-                self.pipeline.pipeline.clustering.min_clusters = min_speakers
-            if max_speakers is not None:
-                self.pipeline.pipeline.clustering.max_clusters = max_speakers
+            # Note: pyannote clustering constraints are set during pipeline creation
+            # For runtime constraints, we'll need to modify the approach
+            if min_speakers is not None or max_speakers is not None:
+                logger.info(f"Speaker constraints requested: min={min_speakers}, max={max_speakers}")
+                logger.info("Note: Runtime speaker constraints not yet implemented")
             
             # Try original file first
             logger.info(f"Starting diarization of {audio_path.name}...")

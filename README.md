@@ -5,8 +5,11 @@ A multi-agent AI assistant for running Shadowdark RPG campaigns end-to-end. This
 
 ## 🎯 Features
 
-- **Session Scribe**: Generate Shadowdark-style session notes from transcripts
+- **Session Scribe**: Generate Shadowdark-style session notes from transcripts or audio
+- **Speaker Diarization**: Identify and label different speakers in audio recordings
+- **Audio Processing**: Support for .wav, .mp3, .m4a, and other common audio formats
 - **RAG Librarian**: Build and query a private knowledge base from PDFs and notes
+- **Notion Integration**: Seamlessly sync session notes to your Notion workspace
 - **CLI Tools**: Command-line interface for all major functions
 - **REST API**: HTTP endpoints for integration with other tools
 - **Database Integration**: PostgreSQL with vector similarity search
@@ -18,7 +21,9 @@ A multi-agent AI assistant for running Shadowdark RPG campaigns end-to-end. This
 - Python 3.11+
 - Docker & Docker Compose
 - PostgreSQL (via Docker)
-- OpenAI API key (optional, has mock mode for testing)
+- OpenAI API key (for AI-powered session notes)
+- HuggingFace token (for speaker diarization, optional)
+- Notion integration token (optional, for workspace sync)
 
 ### Installation
 
@@ -39,13 +44,30 @@ A multi-agent AI assistant for running Shadowdark RPG campaigns end-to-end. This
 3. **Configure environment:**
    ```bash
    cp .env.example .env
-   # Edit .env with your OpenAI API key (optional)
-   # For Notion integration, see NOTION_SETUP.md
+   # Edit .env with your API keys:
+   # - OPENAI_API_KEY (required for AI features)
+   # - HUGGINGFACE_TOKEN (required for audio processing)
+   # - NOTION_TOKEN & NOTION_DATABASE_ID (optional, for Notion sync)
+   # For Notion integration setup, see NOTION_SETUP.md
    ```
 
 4. **Make CLI executable:**
    ```bash
    chmod +x gm
+   ```
+
+### Audio Processing Setup
+
+For audio processing features, you need a HuggingFace token with access to gated repositories:
+
+1. **Create HuggingFace account**: https://huggingface.co/join
+2. **Accept model license**: Visit https://huggingface.co/pyannote/speaker-diarization-community-1 and accept terms
+3. **Create token**: Go to https://huggingface.co/settings/tokens
+   - Create a new fine-grained token
+   - Enable "Read access to public gated repositories"
+4. **Add to .env file**:
+   ```bash
+   HUGGINGFACE_TOKEN=hf_your_token_here
    ```
 
 ## 📖 Usage
@@ -54,9 +76,16 @@ A multi-agent AI assistant for running Shadowdark RPG campaigns end-to-end. This
 
 **Generate session notes:**
 ```bash
+# From text transcripts
 ./gm session summarize transcript.txt --out session_notes.md
 ./gm session summarize notes.md --campaign 1 --use-rag
-./gm session summarize transcript.txt --out notion --play-group "Post 161"  # Sync to Notion!
+
+# From audio files (with speaker diarization)
+./gm session summarize session_recording.m4a --campaign 1 --use-rag
+./gm session summarize podcast.wav --out notion --play-group "Online"
+
+# Sync directly to Notion
+./gm session summarize transcript.txt --out notion --play-group "Post 161"
 ```
 
 **Build knowledge base:**
@@ -82,10 +111,20 @@ uvicorn apps.api.main:app --reload
 
 **Example API calls:**
 ```bash
-# Summarize a session
+# Summarize a text session
 curl -X POST "http://localhost:8000/sessions/summarize" \
   -H "Content-Type: application/json" \
   -d '{"text": "GM: You enter the dungeon...", "use_rag": true}'
+
+# Process audio file with speaker diarization
+curl -X POST "http://localhost:8000/sessions/summarize-audio" \
+  -F "audio_file=@session_recording.m4a" \
+  -F "campaign_id=1" \
+  -F "use_rag=true"
+
+# Speaker diarization only
+curl -X POST "http://localhost:8000/audio/diarize" \
+  -F "audio_file=@recording.wav"
 
 # Query knowledge base
 curl -X POST "http://localhost:8000/rag/query" \
@@ -101,10 +140,10 @@ shadowdark-gm/
 │   ├── api/              # FastAPI REST endpoints
 │   └── worker/           # Background job processing (future)
 ├── core/
-│   ├── agents/           # AI agents (Session Scribe, RAG Librarian)
+│   ├── agents/           # AI agents (Session Scribe, RAG Librarian, Diarizer)
 │   ├── data/             # Database models and vector store
-│   ├── prompts/          # LLM prompts and style guides
-│   └── tools/            # Utility functions and integrations
+│   ├── integrations/     # External service integrations (Notion API)
+│   └── prompts/          # LLM prompts and style guides
 ├── infra/
 │   └── docker-compose.yml  # Database and services
 └── tests/
@@ -116,10 +155,12 @@ shadowdark-gm/
 
 ### Core Components
 
-- **Session Scribe**: Transforms raw transcripts into structured Shadowdark-style notes
+- **Session Scribe**: Transforms raw transcripts or audio into structured Shadowdark-style notes
+- **Speaker Diarizer**: Uses pyannote.audio to identify and label speakers in audio recordings
 - **RAG Librarian**: Manages document ingestion, chunking, and semantic search
 - **Vector Store**: PostgreSQL + pgvector for embedding similarity search
-- **Notion Integration**: Syncs session notes directly to Notion pages
+- **Notion Integration**: Syncs session notes directly to Notion workspace pages
+- **Audio Processing**: Supports multiple formats with automatic conversion
 - **API Layer**: FastAPI with automatic documentation and validation
 
 ## 🎲 Shadowdark Style Guide
@@ -180,12 +221,15 @@ This project demonstrates:
 - [x] CLI interface
 - [x] REST API endpoints
 - [x] Golden dataset and evaluation framework
-- [x] Basic Notion integration
+- [x] Notion integration with proper workspace sync
 
-### Sprint 2 (Audio)
-- [ ] Diarizer agent (WhisperX integration)
-- [ ] Audio file upload and processing
-- [ ] Speaker identification and mapping
+### Sprint 2 (Audio Processing) ✅
+- [x] Speaker Diarizer agent (pyannote.audio integration)
+- [x] Audio file upload and processing (.wav, .mp3, .m4a, etc.)
+- [x] Speaker identification and timeline generation
+- [x] Enhanced session notes with speaker labels
+- [x] CLI and API support for audio processing
+- [x] HuggingFace integration for ML models
 
 ### Sprint 3 (Content Generation)
 - [ ] NPC/Monster Smith
@@ -215,11 +259,26 @@ This is a learning project showcasing modern AI/ML techniques for tabletop RPGs.
 - **Shadowdark RPG** by The Arcane Library
 - **FastAPI** for the excellent web framework
 - **pgvector** for PostgreSQL vector extensions
-- **OpenAI** for GPT models
+- **OpenAI** for GPT models and embeddings
+- **pyannote.audio** for speaker diarization
+- **HuggingFace** for ML model hosting
+- **Notion API** for workspace integration
 
-## Endpoints
-- `POST /rag/ingest` {text, title?, source_id?, doctype?} → {document_id}
-- `POST /rag/query` {query, k?} → top-k chunks
+## API Endpoints
+
+**Session Processing:**
+- `POST /sessions/summarize` - Process text transcripts into session notes
+- `POST /sessions/summarize-audio` - Process audio files with speaker diarization
+
+**Audio Processing:**
+- `POST /audio/diarize` - Perform speaker diarization on audio files
+
+**Knowledge Base (RAG):**
+- `POST /rag/ingest` - Add documents to the knowledge base
+- `POST /rag/query` - Query the knowledge base for relevant information
+
+**Health Check:**
+- `GET /health` - System health status
 
 ## Dev
 1. `cp .env.example .env` and edit if needed.
