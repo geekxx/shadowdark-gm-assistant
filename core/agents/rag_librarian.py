@@ -139,7 +139,8 @@ def ingest_text(
     title: str = None, 
     source_id: str = None, 
     doctype: str = None, 
-    meta: Dict = None
+    meta: Dict = None,
+    classify_chunks: bool = True
 ) -> int:
     """Ingest plain text into the knowledge base"""
     doc = Document(title=title, source_id=source_id, doctype=doctype, meta=meta or {})
@@ -149,7 +150,7 @@ def ingest_text(
     
     pieces = _smart_split_text(text)
     metas = [{"page": meta.get("page") if meta else None, "section": None} for _ in pieces]
-    upsert_chunks(sess, doc, list(zip(pieces, metas)))
+    upsert_chunks(sess, doc, list(zip(pieces, metas)), classify_content=classify_chunks)
     return doc.id
 
 def ingest_file(
@@ -157,7 +158,8 @@ def ingest_file(
     file_path: Union[str, Path],
     title: str = None,
     doctype: str = None,
-    meta: Dict = None
+    meta: Dict = None,
+    classify_chunks: bool = True
 ) -> int:
     """
     Ingest a file (PDF or Markdown) into the knowledge base
@@ -214,7 +216,7 @@ def ingest_file(
                 }
                 all_chunks.append((chunk, chunk_meta))
         
-        upsert_chunks(sess, doc, all_chunks)
+        upsert_chunks(sess, doc, all_chunks, classify_content=classify_chunks)
         
     elif file_path.suffix.lower() in ['.md', '.markdown', '.txt']:
         text = _read_markdown_file(str(file_path))
@@ -232,26 +234,178 @@ def ingest_file(
             }
             chunk_metas.append(chunk_meta)
         
-        upsert_chunks(sess, doc, list(zip(chunks, chunk_metas)))
+        upsert_chunks(sess, doc, list(zip(chunks, chunk_metas)), classify_content=classify_chunks)
     
     else:
         raise ValueError(f"Unsupported file type: {file_path.suffix}")
     
     return doc.id
 
+def _classify_chunk_content(text: str, fallback_type: str = None) -> str:
+    """
+    Classify a chunk based on its content patterns
+    
+    Args:
+        text: The chunk text to analyze
+        fallback_type: Default type if no specific pattern matches
+    
+    Returns:
+        Classified chunk type (monster, spell, rule, table, etc.)
+    """
+    text_lower = text.lower()
+    
+    # Monster stat block patterns
+    monster_patterns = [
+        r'\b(?:ac|armor class)\s*[\d\+\-]+',
+        r'\b(?:hp|hit points)\s*\d+',
+        r'\b(?:str|dex|con|int|wis|cha)\s*[\d\+\-]+',
+        r'\b(?:melee|ranged)\s+attack\s*[:\+]',
+        r'\b(?:damage|dmg)\s*[\dd\+\-\s]+',
+        r'\b(?:cr|challenge rating)\s*[\d\/]+',
+        r'\barmor class\b.*\bhit points\b',
+        r'\bspeed\s*\d+\s*ft',
+        r'\bsaving throws?\b',
+        r'\bskills?\s*:',
+        r'\bactions?\s*$',
+        r'\blegendary actions?\b'
+    ]
+    
+    # Spell patterns
+    spell_patterns = [
+        r'\b(?:level|lvl)\s*[0-9]\s*(?:spell|cantrip)',
+        r'\bschool\s*:?\s*(?:abjuration|conjuration|divination|enchantment|evocation|illusion|necromancy|transmutation)',
+        r'\bcasting time\s*:',
+        r'\brange\s*:?\s*(?:\d+\s*ft|self|touch|sight)',
+        r'\bcomponents\s*:?\s*[vsm]',
+        r'\bduration\s*:',
+        r'\bconcentration\b',
+        r'\bat higher levels\b',
+        r'\bupcasting\b',
+        r'\bspell attack\b',
+        r'\bsave\s*(?:dc|difficulty)',
+        r'\bcantrip\b'
+    ]
+    
+    # Table patterns  
+    table_patterns = [
+        r'\b(?:roll|d\d+)\s+(?:result|effect|outcome)',
+        r'^\s*\d+[-–]\d+\s+',  # Range entries like "01-10"
+        r'^\s*\d+\s+[^\d]',    # Numbered entries like "1 Goblin"
+        r'\| *[^\|]+ *\| *[^\|]+ *\|',  # Markdown table format
+        r'\b(?:random|encounter|treasure|loot)\s+table\b',
+        r'\bgenerator\b.*\btable\b',
+        r'^\s*\d{1,2}[\.:]',   # Numbered list entries
+        r'\bdice\s*roll\b'
+    ]
+    
+    # Equipment patterns
+    equipment_patterns = [
+        r'\b(?:weapon|armor|shield|tool|gear)\b',
+        r'\b(?:damage|dmg)\s*[\dd\+\-\s]+',
+        r'\b(?:light|heavy|medium)\s+armor\b',
+        r'\b(?:one-handed|two-handed|versatile)\b',
+        r'\b(?:finesse|reach|thrown)\b',
+        r'\b(?:studded leather|chain mail|plate armor)\b',
+        r'\bgp\s*(?:cost|price)\b',
+        r'\bweight\s*\d+\s*lb'
+    ]
+    
+    # Rule patterns
+    rule_patterns = [
+        r'\bmake\s+(?:a|an)\s+.*\s+(?:check|roll|save)\b',
+        r'\badvantage\s+(?:on|or)\s+disadvantage\b',
+        r'\bdc\s*\d+\b',
+        r'\bdifficulty\s+class\b',
+        r'\brolling\s+(?:dice|d\d+)\b',
+        r'\binitiative\s+order\b',
+        r'\bturns?\s+(?:and|&)\s+rounds?\b'
+    ]
+    
+    import re
+    
+    # Count matches for each category
+    monster_score = sum(1 for pattern in monster_patterns if re.search(pattern, text_lower))
+    spell_score = sum(1 for pattern in spell_patterns if re.search(pattern, text_lower))
+    table_score = sum(1 for pattern in table_patterns if re.search(pattern, text_lower))
+    equipment_score = sum(1 for pattern in equipment_patterns if re.search(pattern, text_lower))
+    rule_score = sum(1 for pattern in rule_patterns if re.search(pattern, text_lower))
+    
+    # Determine the best match
+    scores = {
+        'monster': monster_score,
+        'spell': spell_score,
+        'table': table_score,
+        'equipment': equipment_score,
+        'rule': rule_score
+    }
+    
+    # Find the highest scoring category
+    best_type = max(scores, key=scores.get)
+    best_score = scores[best_type]
+    
+    # Only classify if we have a strong signal (2+ pattern matches)
+    if best_score >= 2:
+        return best_type
+    
+    # Special cases for single strong indicators
+    if monster_score >= 1 and any(keyword in text_lower for keyword in ['ac ', 'hp ', 'hit points', 'armor class']):
+        return 'monster'
+    
+    if spell_score >= 1 and any(keyword in text_lower for keyword in ['casting time', 'spell attack', 'cantrip']):
+        return 'spell'
+    
+    if table_score >= 1 and ('d' in text_lower and 'roll' in text_lower):
+        return 'table'
+    
+    # Fallback to document type or generic
+    return fallback_type or 'content'
+
 def _infer_doctype(file_path: Path) -> str:
     """Infer document type from filename and path"""
     name_lower = file_path.name.lower()
     parent_lower = file_path.parent.name.lower()
     
-    if any(word in name_lower for word in ['rule', 'core', 'manual', 'guide']):
+    # Check parent directory for type hints
+    if parent_lower in ['rules', 'rule']:
         return 'rule'
-    elif any(word in name_lower for word in ['session', 'transcript', 'log']):
+    elif parent_lower in ['monsters', 'monster', 'bestiary', 'creatures']:
+        return 'monster'
+    elif parent_lower in ['spells', 'spell', 'magic']:
+        return 'spell'
+    elif parent_lower in ['equipment', 'items', 'gear', 'treasure']:
+        return 'equipment'
+    elif parent_lower in ['settings', 'setting', 'world', 'lore']:
+        return 'setting'
+    elif parent_lower in ['supplements', 'supplement', 'expansion']:
+        return 'supplement'
+    elif parent_lower in ['tables', 'generators', 'random']:
+        return 'table'
+    elif parent_lower in ['adventures', 'adventure', 'modules']:
+        return 'adventure'
+    
+    # Check filename for type hints
+    if any(word in name_lower for word in ['rule', 'core', 'manual', 'guide', 'basic']):
+        return 'rule'
+    elif any(word in name_lower for word in ['session', 'transcript', 'log', 'notes']):
         return 'transcript'
-    elif any(word in name_lower for word in ['monster', 'npc', 'creature']):
-        return 'compendium'
-    elif any(word in parent_lower for word in ['notes', 'campaign']):
-        return 'note'
+    elif any(word in name_lower for word in ['monster', 'creature', 'beast', 'undead', 'dragon']):
+        return 'monster'
+    elif any(word in name_lower for word in ['spell', 'magic', 'wizard', 'cleric', 'cantrip']):
+        return 'spell'
+    elif any(word in name_lower for word in ['weapon', 'armor', 'equipment', 'gear', 'treasure']):
+        return 'equipment'
+    elif any(word in name_lower for word in ['setting', 'world', 'city', 'dungeon', 'region']):
+        return 'setting'
+    elif any(word in name_lower for word in ['table', 'random', 'generator', 'encounter']):
+        return 'table'
+    elif any(word in name_lower for word in ['adventure', 'module', 'scenario', 'quest']):
+        return 'adventure'
+    elif any(word in name_lower for word in ['supplement', 'expansion', 'cursed', 'scroll']):
+        return 'supplement'
+    elif any(word in name_lower for word in ['lore', 'history', 'background', 'culture']):
+        return 'lore'
+    elif any(word in name_lower for word in ['reference', 'quick', 'summary', 'cheat']):
+        return 'reference'
     else:
         return 'other'
 

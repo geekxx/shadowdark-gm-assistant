@@ -1,6 +1,6 @@
 
 from typing import Optional, List, Dict
-from sqlmodel import SQLModel, Field, JSON, Column
+from sqlmodel import SQLModel, Field, JSON, Column, Relationship
 from sqlalchemy import String, Integer
 from pgvector.sqlalchemy import Vector
 
@@ -52,6 +52,9 @@ class Document(SQLModel, table=True):
     doctype: Optional[str] = None           # 'rule' | 'note' | 'transcript' | 'compendium' | 'csv'
     title: Optional[str] = None
     meta: Optional[Dict] = Field(default=None, sa_column=Column(JSON))
+    
+    # Relationships
+    chunks: List["Chunk"] = Relationship(back_populates="document")
 
 class Chunk(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -59,5 +62,9 @@ class Chunk(SQLModel, table=True):
     text: str
     page: Optional[int] = None
     section: Optional[str] = None
+    chunk_type: Optional[str] = None        # Content-based type (monster, spell, rule, table, etc.)
     embedding: List[float] = Field(sa_column=Column(Vector(EMBED_DIM)))
     meta: Optional[Dict] = Field(default=None, sa_column=Column(JSON))
+    
+    # Relationships
+    document: Optional[Document] = Relationship(back_populates="chunks")

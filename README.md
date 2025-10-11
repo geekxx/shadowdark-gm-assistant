@@ -1,18 +1,20 @@
 
 # Shadowdark GM Assistant
 
-A multi-agent AI assistant for running Shadowdark RPG campaigns end-to-end. This tool helps GMs capture sessions, generate notes, manage knowledge bases, and maintain campaign continuity using modern AI and RAG (Retrieval-Augmented Generation) techniques.
+A multi-agent AI assistant for running Shadowdark campaigns end-to-end. This tool helps GMs capture sessions, generate notes, manage knowledge bases, and maintain campaign continuity using modern AI and RAG (Retrieval-Augmented Generation) techniques.
 
 ## 🎯 Features
 
-- **Session Scribe**: Generate Shadowdark-style session notes from transcripts or audio
-- **Speaker Diarization**: Identify and label different speakers in audio recordings
-- **Audio Processing**: Support for .wav, .mp3, .m4a, and other common audio formats
-- **RAG Librarian**: Build and query a private knowledge base from PDFs and notes
-- **Notion Integration**: Seamlessly sync session notes to your Notion workspace
-- **CLI Tools**: Command-line interface for all major functions
-- **REST API**: HTTP endpoints for integration with other tools
-- **Database Integration**: PostgreSQL with vector similarity search
+- **💬 Natural Language Chat**: ChatGPT-like interface for Shadowdark rules and GM advice
+- **📝 Session Scribe**: Generate Shadowdark-style session notes from transcripts or audio
+- **🎤 Speaker Diarization**: Identify and label different speakers in audio recordings
+- **🔊 Audio Processing**: Support for .wav, .mp3, .m4a, and other common audio formats
+- **📚 RAG Librarian**: Build and query a private knowledge base from PDFs and notes
+- **🧠 Intelligent Knowledge Base**: Automatic content classification with fallback search
+- **📋 Notion Integration**: Seamlessly sync session notes to your Notion workspace
+- **⚡ CLI Tools**: Comprehensive command-line interface for all functions
+- **🌐 REST API**: HTTP endpoints for integration with other tools
+- **🗄️ Database Integration**: PostgreSQL with pgvector for semantic search
 
 ## 🚀 Quick Start
 
@@ -70,33 +72,68 @@ For audio processing features, you need a HuggingFace token with access to gated
    HUGGINGFACE_TOKEN=hf_your_token_here
    ```
 
-## 📖 Usage
+## 🎮 Usage
 
-### CLI Commands
+### 💬 Interactive Chat (Featured!)
 
-**Generate session notes:**
+Chat naturally with your GM Assistant - like ChatGPT for Shadowdark!
+
+```bash
+# Start interactive chat mode
+./gm chat
+
+# Ask a single question
+./gm chat "What are the stats for a shambling mound?"
+./gm chat "What happens when a character drops to 0 hit points?"
+./gm chat "Tell me about half-orc ancestry traits"
+```
+
+**Example conversation:**
+```
+👤 You: What are troll stats?
+🧙‍♂️ GM Assistant: I don't have specific troll stats in the knowledge base, but I can help 
+                   with other monsters or rules. What else can I assist with?
+
+👤 You: What happens at 0 hit points?
+🧙‍♂️ GM Assistant: When a character drops to 0 hit points, they enter a dying state:
+                   1. Death Timer: Roll 1d4 + CON modifier...
+                   (Page 93)
+```
+
+### 📝 Session Management
+
+Generate session notes from transcripts or audio recordings:
+
 ```bash
 # From text transcripts
-./gm session summarize transcript.txt --out session_notes.md
-./gm session summarize notes.md --campaign 1 --use-rag
+./gm session summarize transcript.txt --campaign 1 --use-rag
 
 # From audio files (with speaker diarization)
 ./gm session summarize session_recording.m4a --campaign 1 --use-rag
-./gm session summarize podcast.wav --out notion --play-group "Online"
 
-# Sync directly to Notion
-./gm session summarize transcript.txt --out notion --play-group "Post 161"
+# Save directly to Notion
+NOTION_DATABASE_ID="your-database-id" ./gm session summarize transcript.txt --out notion --campaign 1
+
+# Multiple output options
+./gm session summarize transcript.txt --out session_notes.md --use-rag
+./gm session summarize transcript.txt --save-to-db --campaign 1
 ```
 
-**Build knowledge base:**
+### 📚 Knowledge Base Management
+
 ```bash
+# Ingest documents with automatic content detection
 ./gm rag ingest shadowdark_rules.pdf --doctype rule
 ./gm rag ingest campaign_notes.md --doctype note
-```
+./gm rag ingest monsters.json --doctype monster
 
-**Query knowledge base:**
-```bash
-./gm rag query "How do death saves work in Shadowdark?"
+# Batch ingestion with auto-detection
+./gm rag ingest-batch knowledge/ --auto-detect
+
+# Query the knowledge base
+./gm rag query "death timer"
+./gm rag query "shambling mound" --types monster
+./gm rag query "half-orc traits"
 ```
 
 ### API Server
@@ -155,13 +192,32 @@ shadowdark-gm/
 
 ### Core Components
 
+- **GM Chat Agent**: Natural language conversational interface with RAG integration
 - **Session Scribe**: Transforms raw transcripts or audio into structured Shadowdark-style notes
 - **Speaker Diarizer**: Uses pyannote.audio to identify and label speakers in audio recordings
-- **RAG Librarian**: Manages document ingestion, chunking, and semantic search
-- **Vector Store**: PostgreSQL + pgvector for embedding similarity search
+- **RAG Librarian**: Manages document ingestion with intelligent chunk classification
+- **Vector Store**: PostgreSQL + pgvector with intelligent fallback search
+- **Content Classification**: Automatic detection of 12+ document types (monster, spell, rule, etc.)
 - **Notion Integration**: Syncs session notes directly to Notion workspace pages
 - **Audio Processing**: Supports multiple formats with automatic conversion
 - **API Layer**: FastAPI with automatic documentation and validation
+
+## ✨ What Makes This Special
+
+### 🧠 Intelligent Knowledge Base
+- **Smart Content Classification**: Automatically detects and classifies 12+ document types (monster stats, spells, rules, tables, equipment)
+- **Fallback Search System**: When vector search fails, intelligent fallback terms ensure you find what you need
+- **Anti-Hallucination**: System prompts prioritize official Shadowdark knowledge over general AI knowledge
+
+### 💬 Natural Conversation
+- **ChatGPT-like Experience**: Ask questions naturally and get accurate Shadowdark-specific answers
+- **Context Awareness**: Maintains conversation history for follow-up questions
+- **Page Citations**: Always includes source page references for rule clarifications
+
+### 🎤 Production-Ready Audio Processing
+- **Multiple Formats**: Supports .wav, .mp3, .m4a, and more
+- **Speaker Identification**: Automatically identifies and labels different speakers
+- **Smart Token Management**: Efficiently processes long transcripts by reducing token usage
 
 ## 🎲 Shadowdark Style Guide
 
@@ -217,11 +273,14 @@ This project demonstrates:
 
 ### Sprint 1 (MVP) ✅
 - [x] Session Scribe with Shadowdark styling
-- [x] RAG Librarian with smart chunking
-- [x] CLI interface
+- [x] RAG Librarian with intelligent chunk classification
+- [x] Natural language chat interface (GM Chat Agent)
+- [x] Intelligent fallback search system
+- [x] CLI interface with comprehensive commands
 - [x] REST API endpoints
 - [x] Golden dataset and evaluation framework
 - [x] Notion integration with proper workspace sync
+- [x] Content-aware document ingestion (12+ types)
 
 ### Sprint 2 (Audio Processing) ✅
 - [x] Speaker Diarizer agent (pyannote.audio integration)
@@ -230,6 +289,7 @@ This project demonstrates:
 - [x] Enhanced session notes with speaker labels
 - [x] CLI and API support for audio processing
 - [x] HuggingFace integration for ML models
+- [x] Graceful degradation for missing tokens
 
 ### Sprint 3 (Content Generation)
 - [ ] NPC/Monster Smith
@@ -269,6 +329,10 @@ This is a learning project showcasing modern AI/ML techniques for tabletop RPGs.
 **Session Processing:**
 - `POST /sessions/summarize` - Process text transcripts into session notes
 - `POST /sessions/summarize-audio` - Process audio files with speaker diarization
+
+**Natural Language Chat:**
+- `POST /chat/` - Interactive chat with GM Assistant
+- `POST /chat/query` - Single question mode
 
 **Audio Processing:**
 - `POST /audio/diarize` - Perform speaker diarization on audio files
