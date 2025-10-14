@@ -194,45 +194,62 @@ def _chunk_transcript(transcript: str, max_tokens: int = 8000) -> List[str]:
     if estimated_tokens <= max_tokens:
         return [transcript]
     
-    # Split by logical breaks (GM/Player turns, then paragraphs, then sentences)
+    # For very large transcripts, use a more aggressive approach
     chunks = []
     
-    # First try splitting by speaker turns
-    turns = re.split(r'\n(?=(?:GM|DM|Player)(?:\s*\([^)]*\))?\s*:)', transcript)
+    # Split by paragraphs first for better logical breaks
+    paragraphs = transcript.split('\n\n')
     
     current_chunk = ""
     current_tokens = 0
     
-    for turn in turns:
-        turn = turn.strip()
-        if not turn:
+    for paragraph in paragraphs:
+        paragraph = paragraph.strip()
+        if not paragraph:
             continue
             
-        turn_tokens = _estimate_tokens(turn)
+        para_tokens = _estimate_tokens(paragraph)
         
-        # If this single turn is too big, we need to split it further
-        if turn_tokens > max_tokens:
-            # Split by sentences
-            sentences = re.split(r'(?<=[.!?])\s+', turn)
+        # If this single paragraph is too big, split it by sentences
+        if para_tokens > max_tokens:
+            sentences = re.split(r'(?<=[.!?])\s+', paragraph)
             for sentence in sentences:
+                sentence = sentence.strip()
+                if not sentence:
+                    continue
+                    
                 sentence_tokens = _estimate_tokens(sentence)
                 
-                if current_tokens + sentence_tokens > max_tokens and current_chunk:
-                    chunks.append(current_chunk.strip())
-                    current_chunk = sentence
-                    current_tokens = sentence_tokens
+                # If single sentence is still too big, split by words (last resort)
+                if sentence_tokens > max_tokens:
+                    words = sentence.split()
+                    word_chunk = ""
+                    for word in words:
+                        test_chunk = word_chunk + " " + word if word_chunk else word
+                        if _estimate_tokens(test_chunk) > max_tokens and word_chunk:
+                            chunks.append(word_chunk.strip())
+                            word_chunk = word
+                        else:
+                            word_chunk = test_chunk
+                    if word_chunk.strip():
+                        chunks.append(word_chunk.strip())
                 else:
-                    current_chunk += " " + sentence if current_chunk else sentence
-                    current_tokens += sentence_tokens
+                    if current_tokens + sentence_tokens > max_tokens and current_chunk:
+                        chunks.append(current_chunk.strip())
+                        current_chunk = sentence
+                        current_tokens = sentence_tokens
+                    else:
+                        current_chunk += "\n" + sentence if current_chunk else sentence
+                        current_tokens += sentence_tokens
         else:
-            # Check if adding this turn would exceed the limit
-            if current_tokens + turn_tokens > max_tokens and current_chunk:
+            # Check if adding this paragraph would exceed the limit
+            if current_tokens + para_tokens > max_tokens and current_chunk:
                 chunks.append(current_chunk.strip())
-                current_chunk = turn
-                current_tokens = turn_tokens
+                current_chunk = paragraph
+                current_tokens = para_tokens
             else:
-                current_chunk += "\n" + turn if current_chunk else turn
-                current_tokens += turn_tokens
+                current_chunk += "\n\n" + paragraph if current_chunk else paragraph
+                current_tokens += para_tokens
     
     # Add the last chunk
     if current_chunk.strip():
@@ -253,9 +270,31 @@ def _merge_session_notes(chunk_notes: List[str]) -> str:
     if len(chunk_notes) == 1:
         return chunk_notes[0]
     
-    # This is a simplified merge - in practice, you might want more sophisticated merging
+    # Extract summaries from each chunk and combine them
+    summaries = []
+    for notes in chunk_notes:
+        lines = notes.split('\n')
+        for i, line in enumerate(lines):
+            if line.startswith('Session Summary'):
+                # Get the summary paragraph(s)
+                summary_lines = []
+                for j in range(i+1, len(lines)):
+                    if lines[j].strip() and not lines[j].startswith('Cast of Characters'):
+                        summary_lines.append(lines[j].strip())
+                    elif lines[j].startswith('Cast of Characters'):
+                        break
+                if summary_lines:
+                    summaries.append(' '.join(summary_lines))
+                break
+    
+    # Create a consolidated summary
+    if summaries:
+        combined_summary = f"Session Summary — {' '.join(summaries)}"
+    else:
+        combined_summary = "Session Summary — Extended gaming session with multiple encounters, roleplay, and exploration."
+    
     merged = f"[{datetime.now().strftime('%Y-%m-%d')}]\n\n"
-    merged += "Session Summary — Multi-part session covering various encounters and roleplay.\n\n"
+    merged += combined_summary + "\n\n"
     
     all_characters = set()
     all_locations = set()
@@ -546,32 +585,63 @@ def summarize_text(
             system_prompt = _build_system_prompt()
             user_prompt = _build_user_prompt(cleaned_transcript, context_chunks)
             
-            # Estimate tokens and choose model accordingly
+            # Estimate tokens and handle large transcripts
             estimated_tokens = _estimate_tokens(system_prompt + user_prompt)
             
-            if estimated_tokens > 100000:  # Very large transcript
-                print(f"   Very large transcript detected ({estimated_tokens:,} tokens). Using GPT-4o with large context...")
-                model = "gpt-4o"
-                max_tokens = 4000
-            elif estimated_tokens > 50000:  # Large transcript  
-                print(f"   Large transcript detected ({estimated_tokens:,} tokens). Using GPT-4o...")
-                model = "gpt-4o"
-                max_tokens = 3000
-            else:  # Normal transcript
-                model = "gpt-4o-mini"  # Faster and cheaper for smaller transcripts
-                max_tokens = 2000
+            # Check if we need to chunk the transcript
+            max_api_tokens = 25000  # Conservative limit to avoid rate limiting
             
-            response = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=0.3,
-                max_tokens=max_tokens
-            )
-            
-            notes = response.choices[0].message.content
+            if estimated_tokens > max_api_tokens:
+                print(f"   Very large transcript ({estimated_tokens:,} tokens) exceeds API limits.")
+                print(f"   Chunking transcript for processing...")
+                
+                # Chunk the cleaned transcript more aggressively
+                chunks = _chunk_transcript(cleaned_transcript, max_tokens=8000)  # Much smaller chunks
+                print(f"   Split into {len(chunks)} chunks")
+                
+                chunk_notes = []
+                for i, chunk in enumerate(chunks):
+                    print(f"   Processing chunk {i+1}/{len(chunks)}...")
+                    
+                    chunk_user_prompt = _build_user_prompt(chunk, context_chunks)
+                    
+                    response = client.chat.completions.create(
+                        model="gpt-4o-mini",  # Use mini for chunks to save costs
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": chunk_user_prompt}
+                        ],
+                        temperature=0.3,
+                        max_tokens=2000
+                    )
+                    
+                    chunk_notes.append(response.choices[0].message.content)
+                
+                # Merge the chunk notes into a cohesive summary
+                print(f"   Merging {len(chunk_notes)} chunk summaries...")
+                notes = _merge_session_notes(chunk_notes)
+                
+            else:
+                # Single API call for smaller transcripts
+                if estimated_tokens > 50000:  # Large but manageable transcript  
+                    print(f"   Large transcript ({estimated_tokens:,} tokens). Using GPT-4o...")
+                    model = "gpt-4o"
+                    max_tokens = 3000
+                else:  # Normal transcript
+                    model = "gpt-4o-mini"  # Faster and cheaper for smaller transcripts
+                    max_tokens = 2000
+                
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    temperature=0.3,
+                    max_tokens=max_tokens
+                )
+                
+                notes = response.choices[0].message.content
             
             # Add today's date if not already present
             if not notes.startswith("["):

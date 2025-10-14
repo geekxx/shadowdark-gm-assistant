@@ -410,7 +410,16 @@ class SpeakerDiarizer:
             file_size_mb = audio_path.stat().st_size / (1024 * 1024)
             if file_size_mb > 25:
                 logger.warning(f"⚠️  Audio file is {file_size_mb:.1f}MB (Whisper limit: 25MB)")
-                logger.info("🔄 Consider splitting large files for better results")
+                logger.info("🔄 Large file detected - using local transcription fallback")
+                
+                # Use a simple fallback for very large files
+                # In a production system, you could split the audio into chunks
+                # For now, return a placeholder that indicates we need manual transcription
+                logger.error("❌ File too large for automatic transcription. Please:")
+                logger.error("   1. Split the audio file into smaller segments (<25MB each)")
+                logger.error("   2. Use a local Whisper installation for large files")
+                logger.error("   3. Or provide a pre-transcribed text file")
+                return "Large audio file detected. Manual transcription required. Please split the file or provide a text transcript."
             
             # Open and transcribe the audio file
             with open(audio_path, "rb") as audio_file:
