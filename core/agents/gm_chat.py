@@ -343,10 +343,9 @@ Remember: Accuracy to official Shadowdark rules is MORE important than being hel
                 messages[-1]["content"] = enhanced_message
             
             response = self.client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-5",
                 messages=messages,
-                temperature=0.7,
-                max_tokens=1000
+                max_completion_tokens=10000
             )
             
             assistant_response = response.choices[0].message.content

@@ -490,7 +490,8 @@ def summarize_audio(
     context_chunks: List[str] = None,
     db_session: Optional[Session] = None,
     huggingface_token: Optional[str] = None,
-    use_mock: bool = False
+    use_mock: bool = False,
+    fast_mode: bool = False
 ) -> str:
     """
     Generate session notes from an audio file with speaker diarization.
@@ -502,6 +503,7 @@ def summarize_audio(
         db_session: Optional database session for persisting results
         huggingface_token: HuggingFace token for accessing diarization models
         use_mock: If True, use mock processing (for testing)
+        fast_mode: If True, skip speaker diarization for faster processing
         
     Returns:
         Formatted session notes with speaker identification
@@ -510,31 +512,48 @@ def summarize_audio(
         if use_mock:
             return _mock_llm_response("Audio processing not implemented in mock mode")
         
-        # Initialize diarizer with both HuggingFace and OpenAI tokens
-        openai_key = os.getenv("OPENAI_API_KEY")
-        diarizer = SpeakerDiarizer(huggingface_token=huggingface_token, openai_api_key=openai_key)
-        
-        # Perform combined diarization and transcription with progress updates
         print(f"🎙️  Processing audio file: {audio_path}")
-        print("📊 Step 1/4: Performing speaker diarization and transcription...")
-        diarization_result, transcript_text = diarizer.diarize_and_transcribe(audio_path, min_speakers=2, max_speakers=6)
         
-        # Create speaker mapping (GM + Players)
-        print("📊 Step 2/4: Creating speaker mapping...")
-        speaker_mapping = diarizer.get_speaker_mapping(diarization_result)
-        print(f"🏷️  Identified speakers: {list(speaker_mapping.values())}")
-        
-        # Create diarized transcript with actual speech content
-        print("📊 Step 3/4: Generating speaker timeline with transcript...")
-        diarized_transcript = diarizer.create_speaker_transcript(diarization_result, transcript_text)
-        
-        # Apply readable speaker names
-        enhanced_transcript = diarizer.apply_speaker_mapping(diarized_transcript, speaker_mapping)
-        transcript_for_notes = enhanced_transcript
-        
-        # Generate session notes using the enhanced transcript with actual content
-        print("📊 Step 4/4: Generating AI session notes...")
-        print("🤖 Processing with AI to create structured session notes...")
+        if fast_mode:
+            # Fast mode: Skip diarization, use Whisper transcription only
+            print("🚀 Fast mode enabled: Skipping speaker diarization...")
+            print("📊 Step 1/2: Transcribing audio with Whisper...")
+            
+            openai_key = os.getenv("OPENAI_API_KEY")
+            diarizer = SpeakerDiarizer(huggingface_token=huggingface_token, openai_api_key=openai_key)
+            
+            # Just transcribe without diarization
+            transcript_text = diarizer.transcribe_audio(audio_path)
+            transcript_for_notes = transcript_text
+            
+            print("📊 Step 2/2: Generating AI session notes...")
+            print("🤖 Processing with AI to create structured session notes...")
+        else:
+            # Full mode: Include speaker diarization
+            # Initialize diarizer with both HuggingFace and OpenAI tokens
+            openai_key = os.getenv("OPENAI_API_KEY")
+            diarizer = SpeakerDiarizer(huggingface_token=huggingface_token, openai_api_key=openai_key)
+            
+            # Perform combined diarization and transcription with progress updates
+            print("📊 Step 1/4: Performing speaker diarization and transcription...")
+            diarization_result, transcript_text = diarizer.diarize_and_transcribe(audio_path, min_speakers=2, max_speakers=6)
+            
+            # Create speaker mapping (GM + Players)
+            print("📊 Step 2/4: Creating speaker mapping...")
+            speaker_mapping = diarizer.get_speaker_mapping(diarization_result)
+            print(f"🏷️  Identified speakers: {list(speaker_mapping.values())}")
+            
+            # Create diarized transcript with actual speech content
+            print("📊 Step 3/4: Generating speaker timeline with transcript...")
+            diarized_transcript = diarizer.create_speaker_transcript(diarization_result, transcript_text)
+            
+            # Apply readable speaker names
+            enhanced_transcript = diarizer.apply_speaker_mapping(diarized_transcript, speaker_mapping)
+            transcript_for_notes = enhanced_transcript
+            
+            # Generate session notes using the enhanced transcript with actual content
+            print("📊 Step 4/4: Generating AI session notes...")
+            print("🤖 Processing with AI to create structured session notes...")
         return summarize_text(
             transcript=transcript_for_notes,
             campaign_id=campaign_id,
@@ -589,7 +608,8 @@ def summarize_text(
             estimated_tokens = _estimate_tokens(system_prompt + user_prompt)
             
             # Check if we need to chunk the transcript
-            max_api_tokens = 25000  # Conservative limit to avoid rate limiting
+            # GPT-5 supports up to 500k tokens, so we can be much more generous
+            max_api_tokens = 400000  # Much higher limit for GPT-5
             
             if estimated_tokens > max_api_tokens:
                 print(f"   Very large transcript ({estimated_tokens:,} tokens) exceeds API limits.")
@@ -606,13 +626,12 @@ def summarize_text(
                     chunk_user_prompt = _build_user_prompt(chunk, context_chunks)
                     
                     response = client.chat.completions.create(
-                        model="gpt-4o-mini",  # Use mini for chunks to save costs
+                        model="gpt-5",  # Use GPT-5 for better processing
                         messages=[
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": chunk_user_prompt}
                         ],
-                        temperature=0.3,
-                        max_tokens=2000
+                        max_completion_tokens=20000
                     )
                     
                     chunk_notes.append(response.choices[0].message.content)
@@ -622,14 +641,18 @@ def summarize_text(
                 notes = _merge_session_notes(chunk_notes)
                 
             else:
-                # Single API call for smaller transcripts
-                if estimated_tokens > 50000:  # Large but manageable transcript  
-                    print(f"   Large transcript ({estimated_tokens:,} tokens). Using GPT-4o...")
-                    model = "gpt-4o"
-                    max_tokens = 3000
+                # Single API call for smaller transcripts with GPT-5
+                if estimated_tokens > 100000:  # Large but manageable transcript  
+                    print(f"   Large transcript ({estimated_tokens:,} tokens). Using GPT-5...")
+                    model = "gpt-5"
+                    max_tokens = 25000
+                elif estimated_tokens > 50000:  # Medium transcript
+                    print(f"   Medium transcript ({estimated_tokens:,} tokens). Using GPT-5...")
+                    model = "gpt-5"
+                    max_tokens = 15000
                 else:  # Normal transcript
-                    model = "gpt-4o-mini"  # Faster and cheaper for smaller transcripts
-                    max_tokens = 2000
+                    model = "gpt-5"  # Use GPT-5 for all processing now
+                    max_tokens = 10000
                 
                 response = client.chat.completions.create(
                     model=model,
@@ -637,8 +660,7 @@ def summarize_text(
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt}
                     ],
-                    temperature=0.3,
-                    max_tokens=max_tokens
+                    max_completion_tokens=max_tokens
                 )
                 
                 notes = response.choices[0].message.content

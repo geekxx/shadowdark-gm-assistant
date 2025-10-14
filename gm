@@ -181,7 +181,8 @@ def cmd_session_audio_summarize(args):
                 context_chunks=context_chunks if context_chunks else None,
                 db_session=sess if args.save_to_db else None,
                 huggingface_token=huggingface_token,
-                use_mock=not bool(os.getenv("OPENAI_API_KEY", "").startswith("sk-"))
+                use_mock=not bool(os.getenv("OPENAI_API_KEY", "").startswith("sk-")),
+                fast_mode=getattr(args, 'fast', False)
             )
         
         # Handle output (same as text processing)
@@ -512,6 +513,8 @@ Examples:
                                   help='Save session data to database')
     summarize_parser.add_argument('--play-group', choices=['Post 161', 'Online'], 
                                   default='Online', help='Play group for Notion (default: Online)')
+    summarize_parser.add_argument('--fast', action='store_true',
+                                  help='Fast mode: skip speaker diarization for faster processing')
     
     # RAG commands
     rag_parser = subparsers.add_parser('rag', help='Knowledge base management')

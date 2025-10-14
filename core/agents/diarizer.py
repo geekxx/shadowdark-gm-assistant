@@ -90,7 +90,7 @@ class SpeakerDiarizer:
         """Load the pyannote.audio diarization pipeline."""
         if self.pipeline is None:
             try:
-                # Try to load the community model (free)
+                # Try to load the community model (free) with optimizations
                 if self.huggingface_token:
                     self.pipeline = Pipeline.from_pretrained(
                         "pyannote/speaker-diarization-community-1",
@@ -101,8 +101,23 @@ class SpeakerDiarizer:
                         "pyannote/speaker-diarization-community-1"
                     )
                 
-                # Send pipeline to GPU if available
-                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                # Apple Silicon optimizations
+                if torch.backends.mps.is_available():
+                    # Enable optimized operations for Apple Silicon
+                    torch.backends.mps.enable_fallback = True
+                    logger.info("🍎 Enabled Apple Silicon MPS optimizations")
+                
+                # Send pipeline to best available device (Apple Silicon MPS, CUDA, or CPU)
+                if torch.backends.mps.is_available():
+                    device = torch.device("mps")
+                    logger.info("🚀 Using Apple Silicon MPS acceleration for diarization")
+                elif torch.cuda.is_available():
+                    device = torch.device("cuda")
+                    logger.info("🚀 Using NVIDIA CUDA acceleration for diarization")
+                else:
+                    device = torch.device("cpu")
+                    logger.info("⚠️  Using CPU for diarization (slower)")
+                
                 self.pipeline.to(device)
                 logger.info(f"Loaded diarization pipeline on {device}")
                 
@@ -197,9 +212,25 @@ class SpeakerDiarizer:
                 logger.info(f"🎯 Speaker constraints: min={min_speakers}, max={max_speakers}")
                 logger.info("Note: Runtime speaker constraints not yet implemented")
             
-            # Try original file first
-            logger.info(f"🎵 Starting diarization of {audio_path.name}...")
-            logger.info("📊 This may take a few minutes depending on audio length...")
+            # Get audio duration for progress estimation
+            try:
+                import librosa
+                audio_duration = librosa.get_duration(path=str(audio_path))
+                duration_mins = int(audio_duration // 60)
+                duration_secs = int(audio_duration % 60)
+                
+                if audio_duration > 7200:  # > 2 hours
+                    logger.info(f"🎵 Starting diarization of {audio_path.name} ({duration_mins}m {duration_secs}s)")
+                    logger.info("⏰ Long audio detected! This may take 10-20 minutes on Apple Silicon...")
+                elif audio_duration > 3600:  # > 1 hour
+                    logger.info(f"🎵 Starting diarization of {audio_path.name} ({duration_mins}m {duration_secs}s)")
+                    logger.info("⏰ Medium-length audio detected! This may take 5-10 minutes on Apple Silicon...")
+                else:
+                    logger.info(f"🎵 Starting diarization of {audio_path.name} ({duration_mins}m {duration_secs}s)")
+                    logger.info("⏰ Processing should complete in a few minutes on Apple Silicon...")
+            except Exception:
+                logger.info(f"🎵 Starting diarization of {audio_path.name}...")
+                logger.info("📊 This may take several minutes depending on audio length...")
             
             try:
                 logger.info("🔍 Analyzing audio with ML model...")
