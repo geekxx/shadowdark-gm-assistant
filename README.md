@@ -8,7 +8,10 @@ A multi-agent AI assistant for running Shadowdark campaigns end-to-end. This too
 - **💬 Natural Language Chat**: ChatGPT-like interface powered by GPT-5 for Shadowdark rules and GM advice
 - **📝 Session Scribe**: Generate Shadowdark-style session notes from transcripts or audio with GPT-5
 - **🎤 Speaker Diarization**: Identify and label different speakers in audio recordings with Apple Silicon acceleration
-- **🔊 Audio Processing**: Support for .wav, .mp3, .m4a, and other common audio formats with fast mode option
+- **🔊 Multi-Stage Audio Processing**: NEW! Handle large audio files (>25MB) with quality-controlled workflow
+- **✂️ Smart Audio Splitting**: Automatically segment large files with intelligent overlap handling
+- **📋 Transcript Review**: Manual transcript editing for accuracy before session note generation
+- **🔗 Transcript Merging**: Seamlessly combine multiple segments with speaker continuity
 - **📚 RAG Librarian**: Build and query a private knowledge base from PDFs and notes
 - **🧠 Intelligent Knowledge Base**: Automatic content classification with fallback search
 - **📋 Notion Integration**: Seamlessly sync session notes to your Notion workspace
@@ -105,6 +108,63 @@ Chat naturally with your GM Assistant - like ChatGPT for Shadowdark!
 
 ### 📝 Session Management
 
+#### 🚀 NEW Multi-Stage Audio Processing Pipeline (For Large Files >25MB)
+
+Perfect for long gaming sessions! Quality-controlled workflow with manual transcript review:
+
+```bash
+# Step 1: Split large audio files automatically
+./gm audio split "large_session.m4a" --output-dir segments/
+# Automatically creates segments under 25MB with smart overlap
+
+# Step 2: Transcribe each segment (can be done in parallel)
+./gm audio transcribe "segments/large_session_segment_001.m4a"
+./gm audio transcribe "segments/large_session_segment_002.m4a"
+# Or use a loop: for segment in segments/*.m4a; do ./gm audio transcribe "$segment"; done
+
+# Step 2.5: CRITICAL - Fix speaker labels in EACH segment transcript!
+# ⚠️  Each segment assigns Speaker_1, Speaker_2 independently
+# The same person might be Speaker_1 in segment 1, Speaker_3 in segment 2
+# Edit each transcript: segments/large_session_segment_001_transcript.md
+# Replace Speaker_1 → Alice, Speaker_2 → Bob, etc. (consistently!)
+
+# Step 3: Merge all segment transcripts into one file  
+./gm transcript merge "final_transcript.md" segments/*_transcript.md
+
+# Step 4: Final review and editing (QUALITY CONTROL!)
+code final_transcript.md  # Final accuracy check, add context, verify consistency
+
+# Step 5: Generate session notes from clean transcript
+./gm session summarize "final_transcript.md" --out "session_notes.md" --use-rag
+```
+
+#### 🎯 Manual Speaker Assignment (Alternative to Diarization)
+
+When automatic speaker diarization produces poor results, use manual assignment modes:
+
+```bash
+# Option 1: No Diarization - Simple Whisper transcript only
+./gm audio transcribe "session.m4a" --no-diarization --output manual_transcript.md
+# Edit manually: Replace [ASSIGN SPEAKER] with GM, Player 1, etc.
+
+# Option 2: Split into segments for easier manual assignment  
+./gm audio transcribe "session.m4a" --manual-segments 5 --output segmented.md
+# Creates 5 equal segments, each marked [ASSIGN SPEAKER]
+
+# Option 3: Time-based segments (every N minutes)
+./gm audio transcribe "session.m4a" --time-segments 10 --output time_based.md  
+# Creates segments every 10 minutes with time estimates
+
+# Quality modes (when using diarization)
+./gm audio transcribe "session.m4a" --quality fast    # More segments, faster processing
+./gm audio transcribe "session.m4a" --quality balanced # Default, good balance
+./gm audio transcribe "session.m4a" --quality precise  # Fewer segments, more processing
+```
+
+> **💡 Tip**: Gaming sessions often have cross-talk, similar voices, and character roleplay that confuses AI diarization. Manual assignment gives you perfect accuracy at the cost of some editing time.
+
+#### 📝 Traditional Session Processing (For Small Files <25MB)
+
 Generate session notes from transcripts or audio recordings with GPT-5 power:
 
 ```bash
@@ -129,6 +189,11 @@ NOTION_DATABASE_ID="your-database-id" ./gm session summarize transcript.txt --ou
 # 2 hour session: ~10-15 mins processing (full mode) | ~2-3 mins (fast mode)  
 # 4 hour session: ~20-30 mins processing (full mode) | ~5-8 mins (fast mode)
 ```
+
+#### 🎯 Which Workflow to Use?
+
+- **Multi-Stage Pipeline**: Large files (>25MB), important sessions needing accuracy, multiple speakers
+- **Traditional Processing**: Small files (<25MB), quick processing, simple sessions with clear audio
 
 ### 📚 Knowledge Base Management
 
@@ -206,6 +271,9 @@ shadowdark-gm/
 - **GM Chat Agent**: Natural language conversational interface with RAG integration
 - **Session Scribe**: Transforms raw transcripts or audio into structured Shadowdark-style notes
 - **Speaker Diarizer**: Uses pyannote.audio to identify and label speakers in audio recordings
+- **Audio Splitter**: NEW! Automatically splits large audio files with intelligent segmentation and overlap
+- **Transcript Generator**: NEW! Creates diarized transcripts optimized for manual review and editing
+- **Transcript Merger**: NEW! Combines multiple segment transcripts with speaker continuity and overlap handling
 - **RAG Librarian**: Manages document ingestion with intelligent chunk classification
 - **Vector Store**: PostgreSQL + pgvector with intelligent fallback search
 - **Content Classification**: Automatic detection of 12+ document types (monster, spell, rule, etc.)
@@ -319,6 +387,10 @@ This project demonstrates:
 - [x] **Fast Mode**: Skip diarization option for 80-90% speed improvement
 - [x] **Large Session Support**: Handle 2-4 hour gaming sessions efficiently
 - [x] **Token Management**: Intelligent chunking system for massive transcripts
+- [x] **Multi-Stage Pipeline**: Audio splitting, transcript generation, merging with quality control
+- [x] **Audio Splitter Agent**: Automatic segmentation of large files with overlap handling
+- [x] **Transcript Generator Agent**: Diarized transcripts optimized for manual review
+- [x] **Transcript Merger Agent**: Seamless segment combination with speaker continuity
 
 ### Sprint 3 (Content Generation)
 - [ ] NPC/Monster Smith

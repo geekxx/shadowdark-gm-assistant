@@ -89,6 +89,35 @@
 3. Add API endpoints in `apps/api/main.py`
 4. Add tests in `test_new_agent.py`
 
+### Multi-Stage Processing Agents
+
+The project includes several agents that work together for complex workflows:
+
+#### AudioSplitter Agent (`core/agents/audio_splitter.py`)
+- **Purpose**: Split large audio files (>25MB) into segments for API compatibility
+- **Key Methods**: `should_split()`, `calculate_segment_duration()`, `split_audio()`
+- **Dependencies**: ffmpeg for audio processing
+- **Usage**: `./gm audio split large_file.m4a --output-dir segments/`
+
+#### TranscriptGenerator Agent (`core/agents/transcript_generator.py`)  
+- **Purpose**: Generate diarized transcripts optimized for manual review
+- **Key Methods**: `generate_transcript()`, `_create_formatted_transcript()`
+- **Dependencies**: SpeakerDiarizer integration, markdown formatting
+- **Usage**: `./gm audio transcribe segment.m4a`
+
+#### TranscriptMerger Agent (`core/agents/transcript_merger.py`)
+- **Purpose**: Merge multiple transcript segments with overlap handling
+- **Key Methods**: `merge_transcripts()`, `_remove_overlap()`, `_merge_parsed_transcripts()`  
+- **Dependencies**: Regex parsing for transcript structure, timestamp manipulation
+- **Usage**: `./gm transcript merge final.md segment1.md segment2.md`
+
+These agents follow the pattern of:
+1. **Input validation** and file existence checks
+2. **Processing logic** specific to the agent's purpose  
+3. **Error handling** with user-friendly messages
+4. **Progress reporting** for long-running operations
+5. **Output formatting** appropriate for the next step in workflow
+
 ### Adding Database Models
 
 1. Add to `core/data/models.py`:

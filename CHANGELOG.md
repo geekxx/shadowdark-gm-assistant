@@ -9,6 +9,58 @@ All notable changes to the Shadowdark GM Assistant project will be documented in
 - Spell and item generators
 - Foundry VTT export functionality
 
+## [0.4.0] - 2025-10-15
+
+### 🎯 Multi-Stage Audio Processing Pipeline
+
+#### NEW Quality-Controlled Workflow
+- **Audio Splitter Agent**: Automatically segments large audio files (>25MB) with intelligent overlap handling
+- **Transcript Generator Agent**: Creates diarized transcripts optimized for manual review and editing
+- **Transcript Merger Agent**: Seamlessly combines multiple segment transcripts with speaker continuity
+- **Manual Review Stage**: Edit transcripts for accuracy before generating session notes
+- **Quality Control**: Manual verification of speaker labels and content before final processing
+
+#### Enhanced CLI Commands
+- `./gm audio split <file> --output-dir <dir>` - Split large audio files into segments
+- `./gm audio transcribe <file>` - Generate reviewable diarized transcripts  
+- `./gm transcript merge <output> <transcripts...>` - Merge multiple transcript segments
+- Enhanced session summarize to work with reviewed transcripts
+
+#### Large File Support
+- **No Size Limits**: Handle any audio file size by automatic segmentation
+- **Whisper API Compatibility**: Keeps segments under 25MB limit automatically
+- **Overlap Handling**: 30-second overlap between segments prevents speech cutoff
+- **Parallel Processing**: Process multiple segments simultaneously for efficiency
+
+#### Workflow Benefits
+- **Accuracy Improvement**: Manual transcript review catches AI transcription errors
+- **Speaker Verification**: Fix speaker labels before session note generation
+- **Context Addition**: Add [dice roll], [laughter], [pause] annotations for better session notes
+- **Collaborative Editing**: Multiple people can review transcripts before processing
+- **Version Control**: Track transcript changes and improvements
+
+### Added
+- AudioSplitter class with intelligent file size detection and segmentation
+- TranscriptGenerator class with structured markdown output and editing guidelines
+- TranscriptMerger class with overlap detection and speaker mapping consistency
+- Complete CLI integration for new multi-stage workflow
+- Comprehensive documentation and usage examples
+
+### Changed
+- CLI architecture enhanced with new command groups (audio, transcript)
+- Database connection handling made more robust with lazy initialization
+- Error handling improved for missing files and processing failures
+
+### Fixed
+- Database connection timeout issues in CLI
+- Path handling bugs in audio processing agents
+- String vs Path object compatibility in file operations
+
+### Performance
+- **Predictable Processing**: Know exactly how long each step will take
+- **Pausable Workflow**: Stop and resume processing at any stage
+- **Flexible Quality**: Choose between fast processing or thorough review
+
 ## [0.3.0] - 2025-10-14
 
 ### 🚀 Major Performance & AI Upgrades

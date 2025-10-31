@@ -174,7 +174,9 @@ class SpeakerDiarizer:
         self, 
         audio_path: str, 
         min_speakers: Optional[int] = None,
-        max_speakers: Optional[int] = None
+        max_speakers: Optional[int] = None,
+        min_segment_duration: float = 1.0,
+        merge_threshold: float = 0.5
     ) -> DiarizationResult:
         """
         Perform speaker diarization on an audio file.
@@ -328,6 +330,17 @@ class SpeakerDiarizer:
             
             # Sort segments by start time
             segments.sort(key=lambda s: s.start_time)
+            
+            # Apply post-processing to improve diarization quality
+            logger.info("🔧 Post-processing diarization results...")
+            segments = self._post_process_segments(segments, min_segment_duration, merge_threshold)
+            
+            # Recalculate speaker stats after post-processing
+            speaker_stats = {}
+            for segment in segments:
+                if segment.speaker_id not in speaker_stats:
+                    speaker_stats[segment.speaker_id] = 0
+                speaker_stats[segment.speaker_id] += segment.duration
             
             # Log completion summary
             num_speakers = len(speaker_stats)
@@ -529,7 +542,9 @@ class SpeakerDiarizer:
         self,
         audio_path: str,
         min_speakers: Optional[int] = None,
-        max_speakers: Optional[int] = None
+        max_speakers: Optional[int] = None,
+        min_segment_duration: float = 1.0,
+        merge_threshold: float = 0.5
     ) -> Tuple[DiarizationResult, Optional[str]]:
         """
         Perform both speaker diarization and speech-to-text transcription.
@@ -545,12 +560,31 @@ class SpeakerDiarizer:
         logger.info("🎵 Starting combined diarization and transcription...")
         
         # Step 1: Perform speaker diarization
-        diarization_result = self.diarize_audio(audio_path, min_speakers, max_speakers)
+        diarization_result = self.diarize_audio(
+            audio_path, min_speakers, max_speakers, 
+            min_segment_duration, merge_threshold
+        )
         
         # Step 2: Transcribe the audio (if OpenAI client available)
         transcript_text = None
         if self.openai_client:
             transcript_text = self.transcribe_audio(audio_path)
+            
+            # Step 2.5: Apply transcript-based corrections if we have the text
+            if transcript_text:
+                logger.info("🔍 Applying transcript-based speaker corrections...")
+                
+                # Apply mid-sentence split detection
+                corrected_segments = self._detect_mid_sentence_splits(
+                    diarization_result.segments, transcript_text
+                )
+                
+                # Apply gaming session heuristics
+                gaming_corrected = self._apply_gaming_session_heuristics(
+                    corrected_segments, transcript_text
+                )
+                
+                diarization_result.segments = gaming_corrected
         else:
             logger.warning("⚠️  OpenAI client not available - skipping transcription")
         
@@ -609,3 +643,430 @@ class SpeakerDiarizer:
             result = result.replace(f"**{tech_id}**", f"**{readable_name}**")
         
         return result
+    
+    def _post_process_segments(
+        self, 
+        segments: List[SpeakerSegment], 
+        min_duration: float = 1.0,
+        merge_threshold: float = 0.5
+    ) -> List[SpeakerSegment]:
+        """
+        Post-process diarization segments to improve quality.
+        
+        This method:
+        1. Merges very short segments with adjacent segments
+        2. Applies speaker smoothing to reduce rapid switching
+        3. Fills small gaps between segments from the same speaker
+        
+        Args:
+            segments: Original segments from diarization
+            min_duration: Minimum duration for segments (seconds)
+            merge_threshold: Time threshold for merging segments (seconds)
+            
+        Returns:
+            List of post-processed segments
+        """
+        if not segments:
+            return segments
+        
+        processed = segments.copy()
+        
+        # Step 1: Merge very short segments with neighbors
+        logger.info(f"🔄 Merging segments shorter than {min_duration}s...")
+        merged_segments = []
+        i = 0
+        
+        while i < len(processed):
+            current = processed[i]
+            
+            # If segment is too short, try to merge it
+            if current.duration < min_duration and len(processed) > 1:
+                # Find best neighbor to merge with
+                best_neighbor_idx = None
+                best_overlap_score = 0
+                
+                # Check previous segment
+                if i > 0:
+                    prev = processed[i-1]
+                    gap = current.start_time - prev.end_time
+                    if gap <= merge_threshold:
+                        # Prefer same speaker or close temporal proximity
+                        score = (2.0 if prev.speaker_id == current.speaker_id else 1.0) / max(gap, 0.1)
+                        if score > best_overlap_score:
+                            best_overlap_score = score
+                            best_neighbor_idx = i-1
+                
+                # Check next segment
+                if i < len(processed) - 1:
+                    next_seg = processed[i+1]
+                    gap = next_seg.start_time - current.end_time
+                    if gap <= merge_threshold:
+                        # Prefer same speaker or close temporal proximity
+                        score = (2.0 if next_seg.speaker_id == current.speaker_id else 1.0) / max(gap, 0.1)
+                        if score > best_overlap_score:
+                            best_overlap_score = score
+                            best_neighbor_idx = i+1
+                
+                # Merge with best neighbor if found
+                if best_neighbor_idx is not None:
+                    neighbor = processed[best_neighbor_idx]
+                    
+                    if best_neighbor_idx < i:
+                        # Merge with previous segment - extend it to include current
+                        if merged_segments:  # Update the already-added previous segment
+                            merged_segments[-1] = SpeakerSegment(
+                                start_time=neighbor.start_time,
+                                end_time=current.end_time,
+                                speaker_id=neighbor.speaker_id,  # Use neighbor's speaker
+                                duration=current.end_time - neighbor.start_time
+                            )
+                        i += 1
+                        continue
+                    else:
+                        # Merge with next segment - will be handled in next iteration
+                        processed[i+1] = SpeakerSegment(
+                            start_time=current.start_time,
+                            end_time=neighbor.end_time,
+                            speaker_id=neighbor.speaker_id,  # Use neighbor's speaker
+                            duration=neighbor.end_time - current.start_time
+                        )
+                        i += 1
+                        continue
+            
+            # Keep segment as-is
+            merged_segments.append(current)
+            i += 1
+        
+        processed = merged_segments
+        
+        # Step 2: Fill small gaps between segments from the same speaker
+        logger.info(f"🔗 Filling gaps smaller than {merge_threshold}s between same-speaker segments...")
+        gap_filled = []
+        
+        for i, segment in enumerate(processed):
+            if gap_filled and i < len(processed):
+                prev_segment = gap_filled[-1]
+                gap = segment.start_time - prev_segment.end_time
+                
+                # If small gap and same speaker, extend previous segment
+                if (gap > 0 and gap <= merge_threshold and 
+                    prev_segment.speaker_id == segment.speaker_id):
+                    
+                    # Extend previous segment to include the gap and merge with current
+                    gap_filled[-1] = SpeakerSegment(
+                        start_time=prev_segment.start_time,
+                        end_time=segment.end_time,
+                        speaker_id=prev_segment.speaker_id,
+                        duration=segment.end_time - prev_segment.start_time
+                    )
+                    continue
+            
+            gap_filled.append(segment)
+        
+        # Step 3: Fix speaker attribution errors using context analysis
+        context_corrected = self._fix_speaker_attribution_errors(gap_filled)
+        
+        # Step 4: Flag remaining potential speaker misattributions
+        flagged_segments = self._flag_potential_errors(context_corrected)
+        
+        logger.info(f"✅ Post-processing complete: {len(segments)} → {len(flagged_segments)} segments")
+        return flagged_segments
+    
+    def _fix_speaker_attribution_errors(self, segments: List[SpeakerSegment]) -> List[SpeakerSegment]:
+        """
+        Fix speaker attribution errors using context analysis.
+        
+        This method looks for patterns that indicate misattribution:
+        1. Very short segments between longer segments of the same speaker
+        2. Isolated speaker changes that break up continuous speech
+        3. Context-based corrections using speaking time patterns
+        """
+        if len(segments) < 3:
+            return segments
+        
+        corrected = segments.copy()
+        corrections_made = 0
+        
+        # Pass 1: Fix isolated short segments between same-speaker segments
+        i = 1
+        while i < len(corrected) - 1:
+            current = corrected[i]
+            prev_segment = corrected[i-1]
+            next_segment = corrected[i+1]
+            
+            # Look for pattern: SpeakerA -> SpeakerB (short) -> SpeakerA
+            if (prev_segment.speaker_id == next_segment.speaker_id and 
+                current.speaker_id != prev_segment.speaker_id and
+                current.duration < 2.0 and  # Very short segment
+                (current.start_time - prev_segment.end_time) < 1.0):  # Close timing
+                
+                # This is likely a misattribution - assign to the surrounding speaker
+                logger.info(f"🔧 Correcting misattribution: {current.speaker_id} -> {prev_segment.speaker_id} "
+                           f"(segment {current.start_time:.1f}s-{current.end_time:.1f}s)")
+                
+                corrected[i] = SpeakerSegment(
+                    start_time=current.start_time,
+                    end_time=current.end_time,
+                    speaker_id=prev_segment.speaker_id,  # Use surrounding speaker
+                    duration=current.duration
+                )
+                corrections_made += 1
+            
+            i += 1
+        
+        # Pass 2: Merge newly corrected segments with neighbors
+        if corrections_made > 0:
+            merged = []
+            i = 0
+            
+            while i < len(corrected):
+                current = corrected[i]
+                
+                # Try to merge with previous segment if same speaker and close timing
+                if (merged and 
+                    merged[-1].speaker_id == current.speaker_id and
+                    (current.start_time - merged[-1].end_time) <= 1.0):
+                    
+                    # Extend the previous segment
+                    merged[-1] = SpeakerSegment(
+                        start_time=merged[-1].start_time,
+                        end_time=current.end_time,
+                        speaker_id=merged[-1].speaker_id,
+                        duration=current.end_time - merged[-1].start_time
+                    )
+                else:
+                    merged.append(current)
+                
+                i += 1
+            
+            corrected = merged
+        
+        # Pass 3: Apply speaker dominance analysis for long sequences
+        # Find sequences where one speaker should likely be dominant
+        window_size = 5  # Look at 5-segment windows
+        for start_idx in range(len(corrected) - window_size + 1):
+            window = corrected[start_idx:start_idx + window_size]
+            
+            # Count speaker occurrences and total duration in window
+            speaker_stats = {}
+            for seg in window:
+                if seg.speaker_id not in speaker_stats:
+                    speaker_stats[seg.speaker_id] = {'count': 0, 'duration': 0}
+                speaker_stats[seg.speaker_id]['count'] += 1
+                speaker_stats[seg.speaker_id]['duration'] += seg.duration
+            
+            # Find dominant speaker (by duration)
+            dominant_speaker = max(speaker_stats.keys(), 
+                                 key=lambda s: speaker_stats[s]['duration'])
+            dominant_duration = speaker_stats[dominant_speaker]['duration']
+            total_duration = sum(stats['duration'] for stats in speaker_stats.values())
+            
+            # If one speaker dominates >80% of the time in this window
+            if dominant_duration / total_duration > 0.8:
+                # Look for very short segments from other speakers to correct
+                for i, seg in enumerate(window):
+                    actual_idx = start_idx + i
+                    if (seg.speaker_id != dominant_speaker and 
+                        seg.duration < 1.5 and
+                        len([s for s in window if s.speaker_id == seg.speaker_id]) == 1):  # Only occurrence
+                        
+                        logger.info(f"🔧 Context correction: {seg.speaker_id} -> {dominant_speaker} "
+                                   f"(segment {seg.start_time:.1f}s-{seg.end_time:.1f}s, dominant speaker pattern)")
+                        
+                        corrected[actual_idx] = SpeakerSegment(
+                            start_time=seg.start_time,
+                            end_time=seg.end_time,
+                            speaker_id=dominant_speaker,
+                            duration=seg.duration
+                        )
+                        corrections_made += 1
+        
+        if corrections_made > 0:
+            logger.info(f"🎯 Fixed {corrections_made} speaker attribution errors using context analysis")
+            
+            # Final merge pass after corrections
+            final_merged = []
+            for segment in corrected:
+                if (final_merged and 
+                    final_merged[-1].speaker_id == segment.speaker_id and
+                    (segment.start_time - final_merged[-1].end_time) <= 0.5):
+                    
+                    # Merge with previous
+                    final_merged[-1] = SpeakerSegment(
+                        start_time=final_merged[-1].start_time,
+                        end_time=segment.end_time,
+                        speaker_id=final_merged[-1].speaker_id,
+                        duration=segment.end_time - final_merged[-1].start_time
+                    )
+                else:
+                    final_merged.append(segment)
+            
+            return final_merged
+        
+        return corrected
+    
+    def _detect_mid_sentence_splits(self, segments: List[SpeakerSegment], transcript_text: str) -> List[SpeakerSegment]:
+        """
+        Detect and fix cases where sentences are split mid-word between speakers.
+        
+        This addresses issues like "Player says most of sentence" -> "GM says 'And she'"
+        where it's clearly a continuation that got misattributed.
+        """
+        if not transcript_text or len(segments) < 2:
+            return segments
+        
+        # Split transcript into words for analysis
+        words = transcript_text.split()
+        if not words:
+            return segments
+        
+        corrected = segments.copy()
+        corrections = 0
+        
+        # Look for very short segments that start with conjunctions or continue previous thought
+        continuation_patterns = [
+            'and', 'but', 'so', 'then', 'now', 'well', 'or', 'yet', 'for',
+            'because', 'since', 'although', 'however', 'therefore', 'thus',
+            'she', 'he', 'they', 'it', 'that', 'this', 'the'
+        ]
+        
+        for i in range(1, len(corrected)):
+            current = corrected[i]
+            prev_segment = corrected[i-1]
+            
+            # Skip if same speaker
+            if current.speaker_id == prev_segment.speaker_id:
+                continue
+                
+            # Look for very short segments (< 3 seconds) that might be continuations
+            if (current.duration < 3.0 and 
+                (current.start_time - prev_segment.end_time) < 0.5):  # Very close timing
+                
+                # This segment might be a continuation of the previous speaker
+                # Heuristic: if the previous segment was much longer, this might be misattributed
+                if prev_segment.duration > current.duration * 3:  # Previous segment 3x longer
+                    logger.info(f"🔧 Potential mid-sentence split detected: "
+                               f"{prev_segment.speaker_id}({prev_segment.duration:.1f}s) -> "
+                               f"{current.speaker_id}({current.duration:.1f}s)")
+                    
+                    # Assign short segment to the previous (longer) speaker
+                    corrected[i] = SpeakerSegment(
+                        start_time=current.start_time,
+                        end_time=current.end_time,
+                        speaker_id=prev_segment.speaker_id,
+                        duration=current.duration
+                    )
+                    corrections += 1
+        
+        if corrections > 0:
+            logger.info(f"🎯 Fixed {corrections} potential mid-sentence attribution errors")
+        
+        return corrected
+    
+    def _apply_gaming_session_heuristics(self, segments: List[SpeakerSegment], transcript_text: str) -> List[SpeakerSegment]:
+        """
+        Apply gaming session specific heuristics to improve speaker attribution.
+        
+        This method uses knowledge of gaming sessions to make better speaker decisions:
+        - GMs typically speak longer (descriptions, NPCs)
+        - Players typically ask questions and respond
+        - Certain phrases are more likely from GM vs Players
+        """
+        if not transcript_text or len(segments) < 2:
+            return segments
+        
+        # Find the most likely GM (speaker with most total speaking time)
+        speaker_durations = {}
+        for segment in segments:
+            if segment.speaker_id not in speaker_durations:
+                speaker_durations[segment.speaker_id] = 0
+            speaker_durations[segment.speaker_id] += segment.duration
+        
+        likely_gm = max(speaker_durations.keys(), key=lambda s: speaker_durations[s])
+        
+        # GM phrases that indicate narration/description
+        gm_indicators = [
+            'you see', 'you notice', 'you hear', 'you feel', 'you find',
+            'as you', 'and so', 'the door', 'the room', 'there is', 'there are',
+            'make a', 'check', 'roll', 'okay so', 'alright', 'let me',
+            'and she says', 'and he says', 'the npc', 'mother gull', 'uncle bemro'
+        ]
+        
+        # Player phrases that indicate questions/responses  
+        player_indicators = [
+            'i want to', 'can i', 'do i', 'what if', 'how about',
+            'my character', 'i think', 'i guess', 'yeah', 'okay', 'sure',
+            'what does', 'where is', 'who is'
+        ]
+        
+        corrected = segments.copy()
+        corrections = 0
+        
+        # Simple text-based analysis on segments
+        words = transcript_text.lower().split()
+        words_per_segment = len(words) // len(segments) if segments else 0
+        
+        for i, segment in enumerate(corrected):
+            # Estimate what text belongs to this segment (rough approximation)
+            start_word = max(0, i * words_per_segment - 5)
+            end_word = min(len(words), (i + 1) * words_per_segment + 5)
+            segment_text = ' '.join(words[start_word:end_word]).lower()
+            
+            # Count GM vs Player indicators in this text region
+            gm_score = sum(1 for phrase in gm_indicators if phrase in segment_text)
+            player_score = sum(1 for phrase in player_indicators if phrase in segment_text)
+            
+            # If there's a strong indication this should be GM but isn't
+            if (gm_score > player_score + 1 and 
+                segment.speaker_id != likely_gm and
+                segment.duration > 5.0):  # Only for longer segments
+                
+                logger.info(f"🎮 Gaming heuristic: {segment.speaker_id} -> {likely_gm} "
+                           f"(GM indicators: {gm_score}, segment {segment.start_time:.1f}s)")
+                
+                corrected[i] = SpeakerSegment(
+                    start_time=segment.start_time,
+                    end_time=segment.end_time,
+                    speaker_id=likely_gm,
+                    duration=segment.duration
+                )
+                corrections += 1
+        
+        if corrections > 0:
+            logger.info(f"🎮 Applied {corrections} gaming session heuristic corrections")
+        
+        return corrected
+    
+    def _flag_potential_errors(self, segments: List[SpeakerSegment]) -> List[SpeakerSegment]:
+        """
+        Flag segments that might have speaker attribution errors.
+        
+        This looks for patterns like:
+        - Very short segments between longer segments of different speakers
+        - Rapid speaker switching that might indicate errors
+        """
+        if len(segments) < 3:
+            return segments
+        
+        flagged_count = 0
+        
+        for i in range(1, len(segments) - 1):
+            current = segments[i]
+            prev_segment = segments[i-1]
+            next_segment = segments[i+1]
+            
+            # Flag very short segments between different speakers
+            if (current.duration < 0.5 and 
+                prev_segment.speaker_id != current.speaker_id and
+                next_segment.speaker_id != current.speaker_id and
+                prev_segment.speaker_id == next_segment.speaker_id):
+                
+                # This might be a misattributed fragment
+                flagged_count += 1
+                # Could add a flag attribute to the segment here if needed
+        
+        if flagged_count > 0:
+            logger.info(f"⚠️  Detected {flagged_count} potentially misattributed segments")
+            logger.info("   Manual review recommended for short segments between longer speaker turns")
+        
+        return segments
